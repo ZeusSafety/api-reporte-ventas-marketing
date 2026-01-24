@@ -26,31 +26,35 @@ def get_connection():
         logging.error(f"Error DB: {str(e)}")
         raise e
 
-# --- LÓGICA DE ANALÍTICA (ACTUALIZADA CON REPORTES 2) ---
+# --- LÓGICA DE ANALÍTICA (ACTUALIZADA: GENERAL 1 Y GENERAL 2 REACTIVO) ---
 
 def obtener_metricas_dashboard(request, headers):
     conn = get_connection()
-    f_inicio = request.args.get("inicio", "2025-01-01")
-    f_fin = request.args.get("fin", datetime.now().strftime('%Y-%m-%d'))
+    f_inicio = request.args.get("inicio")
+    f_fin = request.args.get("fin")
     tipo = request.args.get("tipo") 
+
+    # Si no vienen fechas, pasamos None para que el procedimiento use sus valores por defecto
+    f_inicio = f_inicio if f_inicio and f_inicio != "" else None
+    f_fin = f_fin if f_fin and f_fin != "" else None
 
     try:
         with conn.cursor() as cursor:
-            # --- REPORTE GENERAL 1 ---
+            # --- REPORTE GENERAL 1 (Se mantiene igual) ---
             if tipo == "kpis":
-                cursor.callproc('sp_Dashboard_KpisPrincipales', (f_inicio, f_fin))
+                cursor.callproc('sp_Dashboard_KpisPrincipales', (f_inicio or "2025-01-01", f_fin or datetime.now().strftime('%Y-%m-%d')))
                 result = cursor.fetchone()
             
             elif tipo == "productos":
-                cursor.callproc('sp_Dashboard_TopProductos', (f_inicio, f_fin))
+                cursor.callproc('sp_Dashboard_TopProductos', (f_inicio or "2025-01-01", f_fin or datetime.now().strftime('%Y-%m-%d')))
                 result = cursor.fetchall()
             
             elif tipo == "mensual":
-                cursor.callproc('sp_Dashboard_VentasMensuales', (f_inicio, f_fin))
+                cursor.callproc('sp_Dashboard_VentasMensuales', (f_inicio or "2025-01-01", f_fin or datetime.now().strftime('%Y-%m-%d')))
                 result = cursor.fetchall()
             
             elif tipo == "marketing":
-                cursor.callproc('sp_Dashboard_MarketingAnalytics', (f_inicio, f_fin))
+                cursor.callproc('sp_Dashboard_MarketingAnalytics', (f_inicio or "2025-01-01", f_fin or datetime.now().strftime('%Y-%m-%d')))
                 canales = cursor.fetchall()
                 cursor.nextset()
                 clasificacion = cursor.fetchall()
@@ -58,35 +62,43 @@ def obtener_metricas_dashboard(request, headers):
                 lineas = cursor.fetchall()
                 result = {"canales": canales, "clasificaciones": clasificacion, "lineas": lineas}
 
-            # --- REPORTE GENERAL 2 (NUEVOS) ---
-            elif tipo == "clientes_compras":
-                cursor.callproc('sp_Dashboard_ComprasPorCliente', (f_inicio, f_fin))
-                result = cursor.fetchall()
-
-            elif tipo == "detalle_producto_cliente":
+            # --- REPORTE GENERAL 2 (NUEVO: MOTOR REACTIVO ÚNICO) ---
+            elif tipo == "full_reporte_2":
                 nombre_cliente = request.args.get("cliente")
-                if not nombre_cliente: return (json.dumps({"error": "Falta cliente"}), 400, headers)
-                cursor.callproc('sp_Dashboard_ProductosPorCliente', (nombre_cliente, f_inicio, f_fin))
-                result = cursor.fetchall()
+                # Manejo de nulos para cliente
+                if nombre_cliente == "null" or nombre_cliente == "" or not nombre_cliente:
+                    nombre_cliente = None
 
-            elif tipo == "pagos":
-                cursor.callproc('sp_Dashboard_MetodosPago', (f_inicio, f_fin))
-                result = cursor.fetchall()
-
-            elif tipo == "geografia":
-                cursor.callproc('sp_Dashboard_VentasGeograficas', (f_inicio, f_fin))
-                regiones = cursor.fetchall()
+                cursor.callproc('sp_Dashboard_ReporteGeneral2_Filtrado', (nombre_cliente, f_inicio, f_fin))
+                
+                ranking = cursor.fetchall()
                 cursor.nextset()
-                distritos = cursor.fetchall()
-                result = {"regiones": regiones, "distritos": distritos}
-
-            elif tipo == "comprobantes_almacen":
-                cursor.callproc('sp_Dashboard_ComprobantesYAlmacen', (f_inicio, f_fin))
+                productos = cursor.fetchall()
+                cursor.nextset()
+                pagos = cursor.fetchall()
+                cursor.nextset()
                 comprobantes = cursor.fetchall()
                 cursor.nextset()
                 almacenes = cursor.fetchall()
-                result = {"comprobantes": comprobantes, "almacenes": almacenes}
-            
+                cursor.nextset()
+                regiones = cursor.fetchall()
+                cursor.nextset()
+                distritos = cursor.fetchall()
+
+                result = {
+                    "ranking": ranking,
+                    "productos": productos,
+                    "pagos": pagos,
+                    "comprobantes": comprobantes,
+                    "almacenes": almacenes,
+                    "geografia": {"regiones": regiones, "distritos": distritos}
+                }
+
+            # Mantengo estos por compatibilidad si los necesitas por separado
+            elif tipo == "clientes_compras":
+                cursor.callproc('sp_Dashboard_ComprasPorCliente', (f_inicio or "2025-01-01", f_fin or datetime.now().strftime('%Y-%m-%d')))
+                result = cursor.fetchall()
+
             else:
                 return (json.dumps({"error": "Tipo no válido"}), 400, headers)
 
@@ -94,37 +106,10 @@ def obtener_metricas_dashboard(request, headers):
     finally:
         conn.close()
 
-# --- LÓGICA DE VENTAS Y CLIENTES ---
-
-def gestionar_venta_completa(data, headers):
-    conn = get_connection()
-    try:
-        cab = data.get('cabecera')
-        detalles = data.get('detalles')
-        fecha_auto = datetime.now().strftime('%Y-%m-%d')
-        with conn.cursor() as cursor:
-            id_cliente = cab.get("id_cliente")
-            if not id_cliente:
-                cursor.execute("SELECT ID_CLIENTE FROM clientes_ventas WHERE CLIENTE = %s", (cab.get("cliente"),))
-                res = cursor.fetchone()
-                id_cliente = res['ID_CLIENTE'] if res else None
-
-            sql_cab = "INSERT INTO ventas_online (ASESOR, ID_CLIENTE, CLIENTE, TIPO_COMPROBANTE, `N°_COMPR`, FECHA, REGION, DISTRITO, FORMA_DE_PAGO, SALIDA_DE_PEDIDO, LINEA, CANAL_VENTA, CLASIFICACION) VALUES (%(asesor)s, %(id_cliente)s, %(cliente)s, %(tipo_comprobante)s, %(comprobante)s, %(fecha)s, %(region)s, %(distrito)s, %(forma_pago)s, %(salida)s, %(linea)s, %(canal)s, %(clasificacion)s)"
-            
-            primer = detalles[0] if detalles else {}
-            cursor.execute(sql_cab, {**cab, "id_cliente": id_cliente, "fecha": fecha_auto, "linea": primer.get("linea"), "canal": primer.get("canal"), "clasificacion": primer.get("clasificacion")})
-            id_gen = cursor.lastrowid
-
-            sql_det = "INSERT INTO detalle_ventas (LINEA, CANAL_VENTA, `N°_COMPR`, CODIGO_PRODUCTO, PRODUCTO, CANTIDAD, UNIDAD_MEDIDA, PRECIO_VENTA, DELIVERY, TOTAL, ID_VENTA, CLASIFICACION, FECHA) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-            for it in detalles:
-                cursor.execute(sql_det, (it.get("linea"), it.get("canal"), cab.get("comprobante"), it.get("codigo"), it.get("producto"), it.get("cantidad"), it.get("unidad"), it.get("precio"), it.get("delivery"), it.get("total"), id_gen, it.get("clasificacion"), fecha_auto))
-        conn.commit()
-        return (json.dumps({"success": "Venta registrada", "id": id_gen}), 200, headers)
-    finally:
-        conn.close()
+# --- LÓGICA DE VENTAS Y CLIENTES (SIN CAMBIOS) ---
+# ... (Aquí va tu función gestionar_venta_completa igual que antes)
 
 # --- PUNTO DE ENTRADA ---
-
 @functions_framework.http
 def reporte_ventas_online(request):
     headers = {
