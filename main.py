@@ -65,17 +65,25 @@ def obtener_metricas_dashboard(request, headers):
             # --- REPORTE GENERAL 2 (MOTOR REACTIVO ÚNICO) ---
             elif tipo == "full_reporte_2":
                 nombre_cliente = request.args.get("cliente")
+                nombre_region = request.args.get("region")  ### NUEVO: Recibe la región del front/postman
+
+                # Limpieza de nulos para cliente
                 if nombre_cliente in ["null", "", "undefined", None]:
                     nombre_cliente = None
+                
+                # Limpieza de nulos para región ### NUEVO ###
+                if nombre_region in ["null", "", "undefined", None]:
+                    nombre_region = None
 
-                # Ejecutamos el procedimiento
-                cursor.callproc('sp_Dashboard_ReporteGeneral2_Filtrado', (nombre_cliente, f_inicio, f_fin))
+                # Ejecutamos el procedimiento enviando CUATRO parámetros: cliente, region, inicio, fin
+                # Asegúrate de que tu SP en MySQL ahora reciba estos 4 parámetros
+                cursor.callproc('sp_Dashboard_ReporteGeneral2_Filtrado', (nombre_cliente, nombre_region, f_inicio, f_fin))
                 
                 # Definimos una función interna para capturar sets de forma segura
                 def fetch_all_safe(c):
                     return c.fetchall() if c.description else []
 
-                # 1. Ranking de Clientes (Primer set siempre existe)
+                # 1. Ranking de Clientes (Se actualiza si hay filtro de región)
                 ranking = fetch_all_safe(cursor)
                 
                 # 2. Productos
@@ -94,7 +102,7 @@ def obtener_metricas_dashboard(request, headers):
                 almacenes = []
                 if cursor.nextset(): almacenes = fetch_all_safe(cursor)
                 
-                # 6. Regiones
+                # 6. Regiones (Este se mantiene para mostrar el gráfico circular)
                 regiones = []
                 if cursor.nextset(): regiones = fetch_all_safe(cursor)
                 
