@@ -62,61 +62,69 @@ def obtener_metricas_dashboard(request, headers):
                 lineas = cursor.fetchall()
                 result = {"canales": canales, "clasificaciones": clasificacion, "lineas": lineas}
 
-            # --- REPORTE GENERAL 2 (MOTOR REACTIVO ÚNICO) ---
+            # --- REPORTE GENERAL 2 (MOTOR REACTIVO ÚNICO CON FILTROS TOTALES) ---
             elif tipo == "full_reporte_2":
+                # 1. Capturamos todos los posibles filtros desde la URL
                 nombre_cliente = request.args.get("cliente")
-                nombre_region = request.args.get("region")  ### NUEVO: Recibe la región del front/postman
+                nombre_region = request.args.get("region")
+                forma_pago = request.args.get("pago")
+                tipo_comp = request.args.get("comprobante")
+                almacen_salida = request.args.get("almacen")
 
-                # Limpieza de nulos para cliente
-                if nombre_cliente in ["null", "", "undefined", None]:
-                    nombre_cliente = None
-                
-                # Limpieza de nulos para región ### NUEVO ###
-                if nombre_region in ["null", "", "undefined", None]:
-                    nombre_region = None
+                # 2. Función de limpieza para manejar nulos de Postman/Frontend
+                def limpiar_dato(val):
+                    if val in ["null", "", "undefined", "None", None]:
+                        return None
+                    return val
 
-                # Ejecutamos el procedimiento enviando CUATRO parámetros: cliente, region, inicio, fin
-                # Asegúrate de que tu SP en MySQL ahora reciba estos 4 parámetros
-                cursor.callproc('sp_Dashboard_ReporteGeneral2_Filtrado', (nombre_cliente, nombre_region, f_inicio, f_fin))
+                # 3. Ejecutamos el procedimiento con los 7 parámetros requeridos
+                # Orden: cliente, region, pago, comprobante, almacen, inicio, fin
+                cursor.callproc('sp_Dashboard_ReporteGeneral2_Filtrado', (
+                    limpiar_dato(nombre_cliente),
+                    limpiar_dato(nombre_region),
+                    limpiar_dato(forma_pago),
+                    limpiar_dato(tipo_comp),
+                    limpiar_dato(almacen_salida),
+                    f_inicio,
+                    f_fin
+                ))
                 
-                # Definimos una función interna para capturar sets de forma segura
+                # Función interna para capturar sets de forma segura
                 def fetch_all_safe(c):
                     return c.fetchall() if c.description else []
 
-                # 1. Ranking de Clientes (Se actualiza si hay filtro de región)
+                # 4. Captura secuencial de los 7 resultados del SP
                 ranking = fetch_all_safe(cursor)
                 
-                # 2. Productos
                 productos = []
                 if cursor.nextset(): productos = fetch_all_safe(cursor)
                 
-                # 3. Pagos
                 pagos = []
                 if cursor.nextset(): pagos = fetch_all_safe(cursor)
                 
-                # 4. Comprobantes
                 comprobantes = []
                 if cursor.nextset(): comprobantes = fetch_all_safe(cursor)
                 
-                # 5. Almacenes
                 almacenes = []
                 if cursor.nextset(): almacenes = fetch_all_safe(cursor)
                 
-                # 6. Regiones (Este se mantiene para mostrar el gráfico circular)
                 regiones = []
                 if cursor.nextset(): regiones = fetch_all_safe(cursor)
                 
-                # 7. Distritos
                 distritos = []
                 if cursor.nextset(): distritos = fetch_all_safe(cursor)
 
+                # 5. Estructura final del JSON para el Frontend
                 result = {
                     "ranking": ranking,
                     "productos": productos,
                     "pagos": pagos,
                     "comprobantes": comprobantes,
                     "almacenes": almacenes,
-                    "geografia": {"regiones": regiones, "distritos": distritos}
+                    "geografia": {
+                        "regiones": regiones, 
+                        "distritos": distritos
+                    }
                 }
 
             # Mantengo estos por compatibilidad si los necesitas por separado
