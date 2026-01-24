@@ -62,28 +62,45 @@ def obtener_metricas_dashboard(request, headers):
                 lineas = cursor.fetchall()
                 result = {"canales": canales, "clasificaciones": clasificacion, "lineas": lineas}
 
-            # --- REPORTE GENERAL 2 (NUEVO: MOTOR REACTIVO ÚNICO) ---
+            # --- REPORTE GENERAL 2 (MOTOR REACTIVO ÚNICO) ---
             elif tipo == "full_reporte_2":
                 nombre_cliente = request.args.get("cliente")
-                # Manejo de nulos para cliente
-                if nombre_cliente == "null" or nombre_cliente == "" or not nombre_cliente:
+                if nombre_cliente in ["null", "", "undefined", None]:
                     nombre_cliente = None
 
+                # Ejecutamos el procedimiento
                 cursor.callproc('sp_Dashboard_ReporteGeneral2_Filtrado', (nombre_cliente, f_inicio, f_fin))
                 
-                ranking = cursor.fetchall()
-                cursor.nextset()
-                productos = cursor.fetchall()
-                cursor.nextset()
-                pagos = cursor.fetchall()
-                cursor.nextset()
-                comprobantes = cursor.fetchall()
-                cursor.nextset()
-                almacenes = cursor.fetchall()
-                cursor.nextset()
-                regiones = cursor.fetchall()
-                cursor.nextset()
-                distritos = cursor.fetchall()
+                # Definimos una función interna para capturar sets de forma segura
+                def fetch_all_safe(c):
+                    return c.fetchall() if c.description else []
+
+                # 1. Ranking de Clientes (Primer set siempre existe)
+                ranking = fetch_all_safe(cursor)
+                
+                # 2. Productos
+                productos = []
+                if cursor.nextset(): productos = fetch_all_safe(cursor)
+                
+                # 3. Pagos
+                pagos = []
+                if cursor.nextset(): pagos = fetch_all_safe(cursor)
+                
+                # 4. Comprobantes
+                comprobantes = []
+                if cursor.nextset(): comprobantes = fetch_all_safe(cursor)
+                
+                # 5. Almacenes
+                almacenes = []
+                if cursor.nextset(): almacenes = fetch_all_safe(cursor)
+                
+                # 6. Regiones
+                regiones = []
+                if cursor.nextset(): regiones = fetch_all_safe(cursor)
+                
+                # 7. Distritos
+                distritos = []
+                if cursor.nextset(): distritos = fetch_all_safe(cursor)
 
                 result = {
                     "ranking": ranking,
