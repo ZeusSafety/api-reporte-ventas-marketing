@@ -26,18 +26,17 @@ def get_connection():
         logging.error(f"Error DB: {str(e)}")
         raise e
 
-# --- NUEVA LÓGICA: ANALÍTICA PARA DASHBOARD ---
+# --- LÓGICA DE ANALÍTICA (ACTUALIZADA CON REPORTES 2) ---
 
 def obtener_metricas_dashboard(request, headers):
-    """Ejecuta los procedimientos almacenados para el PowerBI en React."""
     conn = get_connection()
-    # Capturamos fechas del frontend, si no vienen, usamos un rango amplio por defecto
     f_inicio = request.args.get("inicio", "2025-01-01")
     f_fin = request.args.get("fin", datetime.now().strftime('%Y-%m-%d'))
-    tipo = request.args.get("tipo") # kpis, productos, marketing, mensual
+    tipo = request.args.get("tipo") 
 
     try:
         with conn.cursor() as cursor:
+            # --- REPORTE GENERAL 1 ---
             if tipo == "kpis":
                 cursor.callproc('sp_Dashboard_KpisPrincipales', (f_inicio, f_fin))
                 result = cursor.fetchone()
@@ -51,28 +50,51 @@ def obtener_metricas_dashboard(request, headers):
                 result = cursor.fetchall()
             
             elif tipo == "marketing":
-                # Este procedimiento devuelve 3 SELECTs (Canal, Clasificación, Línea)
                 cursor.callproc('sp_Dashboard_MarketingAnalytics', (f_inicio, f_fin))
-                
                 canales = cursor.fetchall()
-                cursor.nextset() # Saltamos al segundo SELECT (Clasificación)
+                cursor.nextset()
                 clasificacion = cursor.fetchall()
-                cursor.nextset() # Saltamos al tercer SELECT (Línea)
+                cursor.nextset()
                 lineas = cursor.fetchall()
-                
-                result = {
-                    "canales": canales,
-                    "clasificaciones": clasificacion,
-                    "lineas": lineas
-                }
+                result = {"canales": canales, "clasificaciones": clasificacion, "lineas": lineas}
+
+            # --- REPORTE GENERAL 2 (NUEVOS) ---
+            elif tipo == "clientes_compras":
+                cursor.callproc('sp_Dashboard_ComprasPorCliente', (f_inicio, f_fin))
+                result = cursor.fetchall()
+
+            elif tipo == "detalle_producto_cliente":
+                nombre_cliente = request.args.get("cliente")
+                if not nombre_cliente: return (json.dumps({"error": "Falta cliente"}), 400, headers)
+                cursor.callproc('sp_Dashboard_ProductosPorCliente', (nombre_cliente, f_inicio, f_fin))
+                result = cursor.fetchall()
+
+            elif tipo == "pagos":
+                cursor.callproc('sp_Dashboard_MetodosPago', (f_inicio, f_fin))
+                result = cursor.fetchall()
+
+            elif tipo == "geografia":
+                cursor.callproc('sp_Dashboard_VentasGeograficas', (f_inicio, f_fin))
+                regiones = cursor.fetchall()
+                cursor.nextset()
+                distritos = cursor.fetchall()
+                result = {"regiones": regiones, "distritos": distritos}
+
+            elif tipo == "comprobantes_almacen":
+                cursor.callproc('sp_Dashboard_ComprobantesYAlmacen', (f_inicio, f_fin))
+                comprobantes = cursor.fetchall()
+                cursor.nextset()
+                almacenes = cursor.fetchall()
+                result = {"comprobantes": comprobantes, "almacenes": almacenes}
+            
             else:
-                return (json.dumps({"error": "Tipo de métrica no válida"}), 400, headers)
+                return (json.dumps({"error": "Tipo no válido"}), 400, headers)
 
         return (json.dumps(result, default=str), 200, headers)
     finally:
         conn.close()
 
-# --- LÓGICA DE VENTAS Y CLIENTES (REUTILIZADA DE TU CÓDIGO) ---
+# --- LÓGICA DE VENTAS Y CLIENTES ---
 
 def gestionar_venta_completa(data, headers):
     conn = get_connection()
@@ -101,7 +123,7 @@ def gestionar_venta_completa(data, headers):
     finally:
         conn.close()
 
-# --- PUNTO DE ENTRADA PRINCIPAL ---
+# --- PUNTO DE ENTRADA ---
 
 @functions_framework.http
 def reporte_ventas_online(request):
@@ -115,12 +137,10 @@ def reporte_ventas_online(request):
     auth = request.headers.get("Authorization")
     if not auth: return (json.dumps({"error": "No token"}), 401, headers)
 
-    # El GET ahora decide si es para el Listado de Clientes o para el Dashboard
     if request.method == "GET":
         if request.args.get("modo") == "dashboard":
             return obtener_metricas_dashboard(request, headers)
         
-        # Si no es dashboard, es el listado normal de clientes que ya tenías
         conn = get_connection()
         try:
             with conn.cursor() as cursor:
