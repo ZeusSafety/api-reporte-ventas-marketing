@@ -30,107 +30,90 @@ def get_connection():
 
 def obtener_metricas_dashboard(request, headers):
     conn = get_connection()
+    # Filtros Comunes
     f_inicio = request.args.get("inicio")
     f_fin = request.args.get("fin")
     tipo = request.args.get("tipo") 
 
-    # Si no vienen fechas, pasamos None para que el procedimiento use sus valores por defecto
-    f_inicio = f_inicio if f_inicio and f_inicio != "" else None
-    f_fin = f_fin if f_fin and f_fin != "" else None
+    # Función interna de limpieza rápida
+    def n(val):
+        return None if val in ["null", "", "undefined", "None", None] else val
 
     try:
         with conn.cursor() as cursor:
-            # --- REPORTE GENERAL 1 (Se mantiene igual) ---
-            if tipo == "kpis":
-                cursor.callproc('sp_Dashboard_KpisPrincipales', (f_inicio or "2025-01-01", f_fin or datetime.now().strftime('%Y-%m-%d')))
-                result = cursor.fetchone()
-            
-            elif tipo == "productos":
-                cursor.callproc('sp_Dashboard_TopProductos', (f_inicio or "2025-01-01", f_fin or datetime.now().strftime('%Y-%m-%d')))
-                result = cursor.fetchall()
-            
-            elif tipo == "mensual":
-                cursor.callproc('sp_Dashboard_VentasMensuales', (f_inicio or "2025-01-01", f_fin or datetime.now().strftime('%Y-%m-%d')))
-                result = cursor.fetchall()
-            
-            elif tipo == "marketing":
-                cursor.callproc('sp_Dashboard_MarketingAnalytics', (f_inicio or "2025-01-01", f_fin or datetime.now().strftime('%Y-%m-%d')))
-                canales = cursor.fetchall()
-                cursor.nextset()
-                clasificacion = cursor.fetchall()
-                cursor.nextset()
-                lineas = cursor.fetchall()
-                result = {"canales": canales, "clasificaciones": clasificacion, "lineas": lineas}
+            # --- REPORTE GENERAL 1: GESTIÓN Y VENTAS (NUEVO MOTOR) ---
+            if tipo == "full_reporte_1":
+                p_prod = request.args.get("producto")
+                p_mes = request.args.get("mes")
+                p_canal = request.args.get("canal")
+                p_clasi = request.args.get("clasificacion")
+                p_linea = request.args.get("linea")
 
-            # --- REPORTE GENERAL 2 (MOTOR REACTIVO ÚNICO CON FILTROS TOTALES) ---
-            elif tipo == "full_reporte_2":
-                # 1. Capturamos todos los posibles filtros desde la URL
-                nombre_cliente = request.args.get("cliente")
-                nombre_region = request.args.get("region")
-                forma_pago = request.args.get("pago")
-                tipo_comp = request.args.get("comprobante")
-                almacen_salida = request.args.get("almacen")
-
-                # 2. Función de limpieza para manejar nulos de Postman/Frontend
-                def limpiar_dato(val):
-                    if val in ["null", "", "undefined", "None", None]:
-                        return None
-                    return val
-
-                # 3. Ejecutamos el procedimiento con los 7 parámetros requeridos
-                # Orden: cliente, region, pago, comprobante, almacen, inicio, fin
-                cursor.callproc('sp_Dashboard_ReporteGeneral2_Filtrado', (
-                    limpiar_dato(nombre_cliente),
-                    limpiar_dato(nombre_region),
-                    limpiar_dato(forma_pago),
-                    limpiar_dato(tipo_comp),
-                    limpiar_dato(almacen_salida),
-                    f_inicio,
-                    f_fin
+                cursor.callproc('sp_Dashboard_General1', (
+                    n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), f_inicio, f_fin
                 ))
-                
-                # Función interna para capturar sets de forma segura
+
                 def fetch_all_safe(c):
                     return c.fetchall() if c.description else []
 
-                # 4. Captura secuencial de los 7 resultados del SP
+                resumen = fetch_all_safe(cursor)
+                ventas_mes = []
+                if cursor.nextset(): ventas_mes = fetch_all_safe(cursor)
+                prod_top = []
+                if cursor.nextset(): prod_top = fetch_all_safe(cursor)
+                canales = []
+                if cursor.nextset(): canales = fetch_all_safe(cursor)
+                clasificaciones = []
+                if cursor.nextset(): clasificaciones = fetch_all_safe(cursor)
+                lineas = []
+                if cursor.nextset(): lineas = fetch_all_safe(cursor)
+
+                result = {
+                    "kpis": resumen[0] if resumen else {"total_generado": 0, "cantidad_ventas": 0},
+                    "ventas_por_mes": ventas_mes,
+                    "productos_top": prod_top,
+                    "canales_venta": canales,
+                    "clasificacion_pedidos": clasificaciones,
+                    "lineas": lineas
+                }
+
+            # --- REPORTE GENERAL 2: OPERATIVO Y CLIENTES ---
+            elif tipo == "full_reporte_2":
+                c = request.args.get("cliente")
+                r = request.args.get("region")
+                p = request.args.get("pago")
+                comp = request.args.get("comprobante")
+                alm = request.args.get("almacen")
+
+                cursor.callproc('sp_Dashboard_ReporteGeneral2_Filtrado', (
+                    n(c), n(r), n(p), n(comp), n(alm), f_inicio, f_fin
+                ))
+
+                def fetch_all_safe(c):
+                    return c.fetchall() if c.description else []
+
                 ranking = fetch_all_safe(cursor)
-                
                 productos = []
                 if cursor.nextset(): productos = fetch_all_safe(cursor)
-                
                 pagos = []
                 if cursor.nextset(): pagos = fetch_all_safe(cursor)
-                
                 comprobantes = []
                 if cursor.nextset(): comprobantes = fetch_all_safe(cursor)
-                
                 almacenes = []
                 if cursor.nextset(): almacenes = fetch_all_safe(cursor)
-                
                 regiones = []
                 if cursor.nextset(): regiones = fetch_all_safe(cursor)
-                
                 distritos = []
                 if cursor.nextset(): distritos = fetch_all_safe(cursor)
 
-                # 5. Estructura final del JSON para el Frontend
                 result = {
                     "ranking": ranking,
                     "productos": productos,
                     "pagos": pagos,
                     "comprobantes": comprobantes,
                     "almacenes": almacenes,
-                    "geografia": {
-                        "regiones": regiones, 
-                        "distritos": distritos
-                    }
+                    "geografia": {"regiones": regiones, "distritos": distritos}
                 }
-
-            # Mantengo estos por compatibilidad si los necesitas por separado
-            elif tipo == "clientes_compras":
-                cursor.callproc('sp_Dashboard_ComprasPorCliente', (f_inicio or "2025-01-01", f_fin or datetime.now().strftime('%Y-%m-%d')))
-                result = cursor.fetchall()
 
             else:
                 return (json.dumps({"error": "Tipo no válido"}), 400, headers)
