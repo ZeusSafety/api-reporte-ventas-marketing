@@ -30,18 +30,19 @@ def get_connection():
 
 def obtener_metricas_dashboard(request, headers):
     conn = get_connection()
-    # Filtros Comunes
-    f_inicio = request.args.get("inicio")
-    f_fin = request.args.get("fin")
+    
+    # --- 1. GESTIÓN DE FILTROS Y FECHAS ---
+    # Si no vienen fechas, ponemos un rango amplio por defecto para evitar errores
+    f_inicio = request.args.get("inicio") or "2024-01-01"
+    f_fin = request.args.get("fin") or datetime.now().strftime('%Y-%m-%d')
     tipo = request.args.get("tipo") 
 
-    # Función interna de limpieza rápida
     def n(val):
         return None if val in ["null", "", "undefined", "None", None] else val
 
     try:
         with conn.cursor() as cursor:
-            # --- REPORTE GENERAL 1: GESTIÓN Y VENTAS (NUEVO MOTOR) ---
+            # --- REPORTE GENERAL 1: GESTIÓN Y VENTAS ---
             if tipo == "full_reporte_1":
                 p_prod = request.args.get("producto")
                 p_mes = request.args.get("mes")
@@ -49,6 +50,7 @@ def obtener_metricas_dashboard(request, headers):
                 p_clasi = request.args.get("clasificacion")
                 p_linea = request.args.get("linea")
 
+                # Ejecutamos el procedimiento que ya une ventas_online con detalle_ventas
                 cursor.callproc('sp_Dashboard_General1', (
                     n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), f_inicio, f_fin
                 ))
@@ -56,20 +58,32 @@ def obtener_metricas_dashboard(request, headers):
                 def fetch_all_safe(c):
                     return c.fetchall() if c.description else []
 
+                # Captura de los 6 ResultSets del SP
                 resumen = fetch_all_safe(cursor)
+                
+                # --- MEJORA AQUÍ: Validación de KPIs ---
+                # Si el SP no devuelve nada o el total es NULL, forzamos ceros limpios
+                kpi_data = {"total_generado": 0, "cantidad_ventas": 0}
+                if resumen and resumen[0].get('total_generado') is not None:
+                    kpi_data = resumen[0]
+
                 ventas_mes = []
                 if cursor.nextset(): ventas_mes = fetch_all_safe(cursor)
+                
                 prod_top = []
                 if cursor.nextset(): prod_top = fetch_all_safe(cursor)
+                
                 canales = []
                 if cursor.nextset(): canales = fetch_all_safe(cursor)
+                
                 clasificaciones = []
                 if cursor.nextset(): clasificaciones = fetch_all_safe(cursor)
+                
                 lineas = []
                 if cursor.nextset(): lineas = fetch_all_safe(cursor)
 
                 result = {
-                    "kpis": resumen[0] if resumen else {"total_generado": 0, "cantidad_ventas": 0},
+                    "kpis": kpi_data,
                     "ventas_por_mes": ventas_mes,
                     "productos_top": prod_top,
                     "canales_venta": canales,
@@ -79,6 +93,8 @@ def obtener_metricas_dashboard(request, headers):
 
             # --- REPORTE GENERAL 2: OPERATIVO Y CLIENTES ---
             elif tipo == "full_reporte_2":
+                # ... (Tu lógica del reporte 2 se mantiene igual, 
+                # asegurando que llame a su respectivo SP)
                 c = request.args.get("cliente")
                 r = request.args.get("region")
                 p = request.args.get("pago")
@@ -88,9 +104,6 @@ def obtener_metricas_dashboard(request, headers):
                 cursor.callproc('sp_Dashboard_ReporteGeneral2_Filtrado', (
                     n(c), n(r), n(p), n(comp), n(alm), f_inicio, f_fin
                 ))
-
-                def fetch_all_safe(c):
-                    return c.fetchall() if c.description else []
 
                 ranking = fetch_all_safe(cursor)
                 productos = []
@@ -114,11 +127,14 @@ def obtener_metricas_dashboard(request, headers):
                     "almacenes": almacenes,
                     "geografia": {"regiones": regiones, "distritos": distritos}
                 }
-
             else:
                 return (json.dumps({"error": "Tipo no válido"}), 400, headers)
 
         return (json.dumps(result, default=str), 200, headers)
+    
+    except Exception as e:
+        logging.error(f"Error en dashboard: {str(e)}")
+        return (json.dumps({"error": str(e)}), 500, headers)
     finally:
         conn.close()
 
