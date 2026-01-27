@@ -173,6 +173,43 @@ def obtener_metricas_dashboard(request, headers):
                     "tipos_pago": pagos,
                     "ventas_por_mes": ventas_mes
                 }
+
+                # --- REPORTE ESPECÍFICO: ZEUS SAFETY ---
+            elif tipo == "zeus_safety_report":
+                p_prod = request.args.get("producto")
+                p_mes = request.args.get("mes")
+                p_canal = request.args.get("canal")
+                p_clasi = request.args.get("clasificacion")
+                p_linea = request.args.get("linea")
+
+                # Llamada al nuevo Stored Procedure corregido
+                cursor.callproc('sp_Dashboard_ZeusSafety', (
+                    n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), f_inicio, f_fin
+                ))
+
+                # 1. KPIs (Total y Cantidad)
+                resumen = fetch_all_safe(cursor)
+                kpi_data = {"total_generado": 0, "cantidad_ventas": 0}
+                if resumen and resumen[0].get('total_generado') is not None:
+                    kpi_data = resumen[0]
+
+                # 2. Clientes | 3. Productos | 4. Canal | 5. Región | 6. Pago | 7. Mes
+                clientes = fetch_all_safe(cursor) if cursor.nextset() else []
+                productos = fetch_all_safe(cursor) if cursor.nextset() else []
+                canales = fetch_all_safe(cursor) if cursor.nextset() else []
+                regiones = fetch_all_safe(cursor) if cursor.nextset() else []
+                pagos = fetch_all_safe(cursor) if cursor.nextset() else []
+                ventas_mes = fetch_all_safe(cursor) if cursor.nextset() else []
+
+                result = {
+                    "kpis": kpi_data,
+                    "clientes": clientes,
+                    "productos_vendidos": productos,
+                    "canal_ventas": canales,
+                    "ventas_region": regiones,
+                    "tipos_pago": pagos,
+                    "ventas_por_mes": ventas_mes
+                } 
                 
             else:
                 return (json.dumps({"error": "Tipo no válido"}), 400, headers)
