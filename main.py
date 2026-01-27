@@ -31,8 +31,6 @@ def get_connection():
 def obtener_metricas_dashboard(request, headers):
     conn = get_connection()
     
-    # --- 1. GESTIÓN DE FILTROS Y FECHAS ---
-    # Si no vienen fechas, ponemos un rango amplio por defecto para evitar errores
     f_inicio = request.args.get("inicio") or "2024-01-01"
     f_fin = request.args.get("fin") or datetime.now().strftime('%Y-%m-%d')
     tipo = request.args.get("tipo") 
@@ -42,6 +40,9 @@ def obtener_metricas_dashboard(request, headers):
 
     try:
         with conn.cursor() as cursor:
+            def fetch_all_safe(c):
+                return c.fetchall() if c.description else []
+
             # --- REPORTE GENERAL 1: GESTIÓN Y VENTAS ---
             if tipo == "full_reporte_1":
                 p_prod = request.args.get("producto")
@@ -50,35 +51,23 @@ def obtener_metricas_dashboard(request, headers):
                 p_clasi = request.args.get("clasificacion")
                 p_linea = request.args.get("linea")
 
-                # Ejecutamos el procedimiento que ya une ventas_online con detalle_ventas
                 cursor.callproc('sp_Dashboard_General1', (
                     n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), f_inicio, f_fin
                 ))
 
-                def fetch_all_safe(c):
-                    return c.fetchall() if c.description else []
-
-                # Captura de los 6 ResultSets del SP
                 resumen = fetch_all_safe(cursor)
-                
-                # --- MEJORA AQUÍ: Validación de KPIs ---
-                # Si el SP no devuelve nada o el total es NULL, forzamos ceros limpios
                 kpi_data = {"total_generado": 0, "cantidad_ventas": 0}
                 if resumen and resumen[0].get('total_generado') is not None:
                     kpi_data = resumen[0]
 
                 ventas_mes = []
                 if cursor.nextset(): ventas_mes = fetch_all_safe(cursor)
-                
                 prod_top = []
                 if cursor.nextset(): prod_top = fetch_all_safe(cursor)
-                
                 canales = []
                 if cursor.nextset(): canales = fetch_all_safe(cursor)
-                
                 clasificaciones = []
                 if cursor.nextset(): clasificaciones = fetch_all_safe(cursor)
-                
                 lineas = []
                 if cursor.nextset(): lineas = fetch_all_safe(cursor)
 
@@ -93,8 +82,6 @@ def obtener_metricas_dashboard(request, headers):
 
             # --- REPORTE GENERAL 2: OPERATIVO Y CLIENTES ---
             elif tipo == "full_reporte_2":
-                # ... (Tu lógica del reporte 2 se mantiene igual, 
-                # asegurando que llame a su respectivo SP)
                 c = request.args.get("cliente")
                 r = request.args.get("region")
                 p = request.args.get("pago")
@@ -106,6 +93,12 @@ def obtener_metricas_dashboard(request, headers):
                 ))
 
                 ranking = fetch_all_safe(cursor)
+                
+                # Mejora: Redondeo de montos en el ranking para evitar números largos
+                for row in ranking:
+                    if 'monto_total' in row:
+                        row['monto_total'] = int(round(float(row['monto_total'] or 0)))
+
                 productos = []
                 if cursor.nextset(): productos = fetch_all_safe(cursor)
                 pagos = []
@@ -138,8 +131,53 @@ def obtener_metricas_dashboard(request, headers):
     finally:
         conn.close()
 
-# --- LÓGICA DE VENTAS Y CLIENTES (SIN CAMBIOS) ---
-# ... (Aquí va tu función gestionar_venta_completa igual que antes)
+# --- LÓGICA DE VENTAS Y CLIENTES ---
+
+def gestionar_venta_completa(data, headers):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cab = data['cabecera']
+            sql_v = """INSERT INTO ventas_online (ASESOR, ID_CLIENTE, CLIENTE, TIPO_COMPROBANTE, 
+                       N°_COMPR, FECHA, REGION, DISTRITO, FORMA_DE_PAGO, SALIDA_DE_PEDIDO, 
+                       LINEA, CANAL_VENTA, CLASIFICACION) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+            cursor.execute(sql_v, (cab['asesor'], cab['id_cliente'], cab['cliente'], cab['tipo_comprobante'],
+                                   cab['n_compr'], cab['fecha'], cab['region'], cab['distrito'], 
+                                   cab['forma_pago'], cab['salida'], cab['linea'], cab['canal'], cab['clasificacion']))
+            id_v = cursor.lastrowid
+            
+            for d in data['detalle']:
+                sql_d = """INSERT INTO detalle_ventas (LINEA, CANAL_VENTA, N°_COMPR, CODIGO_PRODUCTO, 
+                           PRODUCTO, CANTIDAD, UNIDAD_MEDIDA, PRECIO_VENTA, DELIVERY, TOTAL, 
+                           ID_VENTA, CLASIFICACION, FECHA) 
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                cursor.execute(sql_d, (d['linea'], d['canal'], d['n_compr'], d['codigo'], d['producto'],
+                                       d['cantidad'], d['unidad'], d['precio'], d['delivery'], d['total'],
+                                       id_v, d['clasificacion'], d['fecha']))
+            conn.commit()
+            return (json.dumps({"status": "ok", "id": id_v}), 200, headers)
+    except Exception as e:
+        conn.rollback()
+        return (json.dumps({"error": str(e)}), 500, headers)
+    finally:
+        conn.close()
+
+def insertar_cliente(data, headers):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """INSERT INTO clientes_ventas (FECHA, CLIENTE, TELEFONO, RUC, DNI, REGION, 
+                     DISTRITO, TIPO_CLIENTE, CANAL_ORIGEN) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+            cursor.execute(sql, (data['fecha'], data['cliente'], data['telefono'], data['ruc'], 
+                                 data['dni'], data['region'], data['distrito'], data['tipo'], data['canal']))
+            conn.commit()
+            return (json.dumps({"status": "ok"}), 200, headers)
+    except Exception as e:
+        conn.rollback()
+        return (json.dumps({"error": str(e)}), 500, headers)
+    finally:
+        conn.close()
 
 # --- PUNTO DE ENTRADA ---
 @functions_framework.http
@@ -168,6 +206,9 @@ def reporte_ventas_online(request):
 
     elif request.method == "POST":
         data = request.get_json()
-        return gestionar_venta_completa(data, headers) if "cabecera" in data else insertar_cliente(data, headers)
+        if "cabecera" in data:
+            return gestionar_venta_completa(data, headers)
+        else:
+            return insertar_cliente(data, headers)
 
     return (json.dumps({"error": "Método no permitido"}), 405, headers)
