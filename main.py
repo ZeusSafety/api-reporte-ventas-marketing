@@ -120,6 +120,60 @@ def obtener_metricas_dashboard(request, headers):
                     "almacenes": almacenes,
                     "geografia": {"regiones": regiones, "distritos": distritos}
                 }
+
+                # --- REPORTE ESPECÍFICO: ZEUS ELECTRIC ---
+            elif tipo == "zeus_electric_report":
+                p_prod = request.args.get("producto")
+                p_mes = request.args.get("mes")
+                p_canal = request.args.get("canal")
+                p_clasi = request.args.get("clasificacion")
+                p_linea = request.args.get("linea")
+
+                # Llamamos al procedimiento que acabas de crear
+                cursor.callproc('sp_Dashboard_ZeusElectric', (
+                    n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), f_inicio, f_fin
+                ))
+
+                # 1. KPIs (Total y Cantidad)
+                resumen = fetch_all_safe(cursor)
+                kpi_data = {"total_generado": 0, "cantidad_ventas": 0}
+                if resumen and resumen[0].get('total_generado') is not None:
+                    kpi_data = resumen[0]
+
+                # 2. Clientes (Ranking central)
+                clientes = []
+                if cursor.nextset(): clientes = fetch_all_safe(cursor)
+
+                # 3. Productos Vendidos (Ranking unidades)
+                productos = []
+                if cursor.nextset(): productos = fetch_all_safe(cursor)
+
+                # 4. Canal de Ventas
+                canales = []
+                if cursor.nextset(): canales = fetch_all_safe(cursor)
+
+                # 5. Ventas por Región
+                regiones = []
+                if cursor.nextset(): regiones = fetch_all_safe(cursor)
+
+                # 6. Tipos de Pago
+                pagos = []
+                if cursor.nextset(): pagos = fetch_all_safe(cursor)
+
+                # 7. Ventas por Mes (Tendencia inferior)
+                ventas_mes = []
+                if cursor.nextset(): ventas_mes = fetch_all_safe(cursor)
+
+                result = {
+                    "kpis": kpi_data,
+                    "clientes": clientes,
+                    "productos_vendidos": productos,
+                    "canal_ventas": canales,
+                    "ventas_region": regiones,
+                    "tipos_pago": pagos,
+                    "ventas_por_mes": ventas_mes
+                }
+                
             else:
                 return (json.dumps({"error": "Tipo no válido"}), 400, headers)
 
