@@ -45,41 +45,51 @@ def obtener_metricas_dashboard(request, headers):
 
             # --- REPORTE GENERAL 1: GESTIÓN Y VENTAS ---
             if tipo == "full_reporte_1":
-                p_prod = request.args.get("producto")
+                # 1. Captura adaptativa: busca 'producto' (front) o 'p_prod' (variable interna)
+                p_prod = request.args.get("producto") or request.args.get("p_prod")
                 p_mes = request.args.get("mes")
                 p_canal = request.args.get("canal")
-                p_clasi = request.args.get("clasificacion")
+                p_clasi = request.args.get("clasificacion") or request.args.get("clasi")
                 p_linea = request.args.get("linea")
 
+                # 2. Ejecución del SP
                 cursor.callproc('sp_Dashboard_General1', (
                     n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), f_inicio, f_fin
                 ))
 
+                # 3. KPIs
                 resumen = fetch_all_safe(cursor)
                 kpi_data = {"total_generado": 0, "cantidad_ventas": 0}
                 if resumen and resumen[0].get('total_generado') is not None:
                     kpi_data = resumen[0]
 
-                ventas_mes = []
-                if cursor.nextset(): ventas_mes = fetch_all_safe(cursor)
+                # 4. Otros datasets (Ventas mes, Canales, etc.)
+                ventas_mes = fetch_all_safe(cursor) if cursor.nextset() else []
+                
+                # --- CORRECCIÓN CLAVE PARA PRODUCTOS TOP ---
+                prod_raw = fetch_all_safe(cursor) if cursor.nextset() else []
                 prod_top = []
-                if cursor.nextset(): prod_top = fetch_all_safe(cursor)
-                canales = []
-                if cursor.nextset(): canales = fetch_all_safe(cursor)
-                clasificaciones = []
-                if cursor.nextset(): clasificaciones = fetch_all_safe(cursor)
-                lineas = []
-                if cursor.nextset(): lineas = fetch_all_safe(cursor)
+                for p in prod_raw:
+                    prod_top.append({
+                        "PRODUCTO": p.get("PRODUCTO") or p.get("producto"),
+                        # Sumamos unidades_test (del nuevo SQL) o UNIDADES (del antiguo)
+                        "UNIDADES": float(p.get("unidades_test") or p.get("UNIDADES") or 0),
+                        "DOCENAS": p.get("DOCENAS") or 0,
+                        "PARES": p.get("PARES") or 0
+                    })
+
+                canales = fetch_all_safe(cursor) if cursor.nextset() else []
+                clasificaciones = fetch_all_safe(cursor) if cursor.nextset() else []
+                lineas = fetch_all_safe(cursor) if cursor.nextset() else []
 
                 result = {
                     "kpis": kpi_data,
                     "ventas_por_mes": ventas_mes,
-                    "productos_top": prod_top,
+                    "productos_top": prod_top, # Ahora lleva los datos mapeados correctamente
                     "canales_venta": canales,
                     "clasificacion_pedidos": clasificaciones,
                     "lineas": lineas
                 }
-
             # --- REPORTE GENERAL 2: OPERATIVO Y CLIENTES ---
             elif tipo == "full_reporte_2":
                 c = request.args.get("cliente")
