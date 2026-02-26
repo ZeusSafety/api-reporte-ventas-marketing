@@ -6,6 +6,8 @@ import pymysql.cursors
 import json
 import os
 from datetime import datetime
+import pandas as pd
+import io
 
 # --- CONFIGURACIÓN DE APIS EXTERNAS ---
 API_TOKEN_VERIFY = "https://api-verificacion-token-2946605267.us-central1.run.app"
@@ -280,6 +282,58 @@ def insertar_cliente(data, headers):
     finally:
         conn.close()
 
+# para cargar datos del excel a la tabla clientes ventas online
+def cargar_excel_clientes(request, headers):
+    # Verificamos que se haya enviado un archivo
+    if 'file' not in request.files:
+        return (json.dumps({"error": "No se encontró el archivo en la petición"}), 400, headers)
+    
+    file = request.files['file']
+    
+    try:
+        # Leemos el Excel especificando la hoja 'Table1'
+        # Usamos io.BytesIO para leer el archivo directamente desde la memoria
+        df = pd.read_excel(io.BytesIO(file.read()), sheet_name='Table1')
+
+        # Validamos que las columnas necesarias existan (según tu descripción)
+        columnas_requeridas = [
+            'FECHA', 'CLIENTE', 'TELEFONO', 'RUC', 'DNI', 
+            'REGION', 'DISTRITO', 'TIPO_CLIENTE', 'CANAL_ORIGEN'
+        ]
+        
+        # Filtramos solo las columnas que nos interesan (el ID_CLIENTE es AI en DB, no lo enviamos)
+        df_final = df[columnas_requeridas].copy()
+        
+        # Limpieza básica: Reemplazar valores nulos por None para MySQL
+        df_final = df_final.where(pd.notnull(df_final), None)
+
+        conn = get_connection()
+        try:
+            with conn.cursor() as cursor:
+                sql = """INSERT INTO clientes_ventas (FECHA, CLIENTE, TELEFONO, RUC, DNI, REGION, 
+                         DISTRITO, TIPO_CLIENTE, CANAL_ORIGEN) 
+                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                
+                # Convertimos el DataFrame a una lista de tuplas para inserción masiva
+                valores = [tuple(x) for x in df_final.values]
+                
+                # Ejecutamos en lote para mayor eficiencia
+                cursor.executemany(sql, valores)
+                
+            conn.commit()
+            return (json.dumps({"status": "ok", "mensaje": f"Se cargaron {len(valores)} clientes"}), 200, headers)
+            
+        except Exception as e:
+            conn.rollback()
+            logging.error(f"Error al insertar en DB: {str(e)}")
+            return (json.dumps({"error": f"Error de base de datos: {str(e)}"}), 500, headers)
+        finally:
+            conn.close()
+
+    except Exception as e:
+        logging.error(f"Error procesando Excel: {str(e)}")
+        return (json.dumps({"error": f"Error al procesar el archivo: {str(e)}"}), 500, headers)
+
 # --- PUNTO DE ENTRADA ---
 @functions_framework.http
 def reporte_ventas_online(request):
@@ -306,10 +360,19 @@ def reporte_ventas_online(request):
             conn.close()
 
     elif request.method == "POST":
-        data = request.get_json()
-        if "cabecera" in data:
-            return gestionar_venta_completa(data, headers)
-        else:
-            return insertar_cliente(data, headers)
+        # CASO 1: Carga masiva por Excel (multipart/form-data)
+        if 'file' in request.files:
+            return cargar_excel_clientes(request, headers)
+        
+        # CASO 2: Inserción manual o Venta completa (JSON)
+        data = request.get_json(silent=True)
+        if data:
+            if "cabecera" in data:
+                return gestionar_venta_completa(data, headers)
+            else:
+                return insertar_cliente(data, headers)
+        
+        return (json.dumps({"error": "No se recibieron datos válidos"}), 400, headers)
+
 
     return (json.dumps({"error": "Método no permitido"}), 405, headers)
