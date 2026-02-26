@@ -284,28 +284,32 @@ def insertar_cliente(data, headers):
 
 # para cargar datos del excel a la tabla clientes ventas online
 def cargar_excel_clientes(request, headers):
-    # Verificamos que se haya enviado un archivo
     if 'file' not in request.files:
-        return (json.dumps({"error": "No se encontró el archivo en la petición"}), 400, headers)
+        return (json.dumps({"error": "No se encontró el archivo"}), 400, headers)
     
     file = request.files['file']
     
     try:
-        # Leemos el Excel especificando la hoja 'Table1'
-        # Usamos io.BytesIO para leer el archivo directamente desde la memoria
         df = pd.read_excel(io.BytesIO(file.read()), sheet_name='Table1')
 
-        # Validamos que las columnas necesarias existan (según tu descripción)
+        # --- CORRECCIÓN AQUÍ ---
+        # 1. Reemplazamos NaN (not a number) por None (compatible con MySQL)
+        # Usamos replace con numpy para asegurar que cubrimos todos los tipos de nulos
+        import numpy as np
+        df = df.replace({np.nan: None})
+
+        # 2. Seleccionamos las columnas
         columnas_requeridas = [
             'FECHA', 'CLIENTE', 'TELEFONO', 'RUC', 'DNI', 
             'REGION', 'DISTRITO', 'TIPO_CLIENTE', 'CANAL_ORIGEN'
         ]
         
-        # Filtramos solo las columnas que nos interesan (el ID_CLIENTE es AI en DB, no lo enviamos)
-        df_final = df[columnas_requeridas].copy()
-        
-        # Limpieza básica: Reemplazar valores nulos por None para MySQL
-        df_final = df_final.where(pd.notnull(df_final), None)
+        # Nos aseguramos de que si faltan columnas en el Excel no rompa el código
+        for col in columnas_requeridas:
+            if col not in df.columns:
+                df[col] = None
+
+        df_final = df[columnas_requeridas]
 
         conn = get_connection()
         try:
@@ -314,25 +318,22 @@ def cargar_excel_clientes(request, headers):
                          DISTRITO, TIPO_CLIENTE, CANAL_ORIGEN) 
                          VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
                 
-                # Convertimos el DataFrame a una lista de tuplas para inserción masiva
+                # Convertimos filas a tuplas
                 valores = [tuple(x) for x in df_final.values]
                 
-                # Ejecutamos en lote para mayor eficiencia
                 cursor.executemany(sql, valores)
                 
             conn.commit()
-            return (json.dumps({"status": "ok", "mensaje": f"Se cargaron {len(valores)} clientes"}), 200, headers)
+            return (json.dumps({"status": "ok", "mensaje": f"Cargados {len(valores)} clientes"}), 200, headers)
             
         except Exception as e:
             conn.rollback()
-            logging.error(f"Error al insertar en DB: {str(e)}")
-            return (json.dumps({"error": f"Error de base de datos: {str(e)}"}), 500, headers)
+            return (json.dumps({"error": f"Error DB: {str(e)}"}), 500, headers)
         finally:
             conn.close()
 
     except Exception as e:
-        logging.error(f"Error procesando Excel: {str(e)}")
-        return (json.dumps({"error": f"Error al procesar el archivo: {str(e)}"}), 500, headers)
+        return (json.dumps({"error": f"Error Excel: {str(e)}"}), 500, headers)
 
 # --- PUNTO DE ENTRADA ---
 @functions_framework.http
