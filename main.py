@@ -469,9 +469,25 @@ def cargar_excel_detalle_ventas(request, headers):
         try:
             with conn.cursor() as cursor:
                 # Primero, creamos un diccionario que mapea N°_COMPR -> ID_VENTA
-                # Esto evita el error de foreign key porque usamos el ID_VENTA real de la BD
-                cursor.execute("SELECT ID_VENTA, N°_COMPR FROM ventas_online")
-                mapa_comprobantes = {row['N°_COMPR']: row['ID_VENTA'] for row in cursor.fetchall()}
+                # Normalizamos los valores (trim) para evitar problemas con espacios
+                # Si hay múltiples registros con el mismo N°_COMPR, tomamos el ID_VENTA más reciente (mayor)
+                cursor.execute("SELECT ID_VENTA, N°_COMPR FROM ventas_online ORDER BY ID_VENTA DESC")
+                resultados = cursor.fetchall()
+                
+                # Creamos dos mapas: uno exacto y otro normalizado (sin espacios)
+                # Si hay duplicados, el último (más reciente) sobrescribe el anterior
+                mapa_comprobantes_exacto = {}
+                mapa_comprobantes_normalizado = {}
+                
+                for row in resultados:
+                    n_compr_original = row['N°_COMPR']
+                    if n_compr_original:
+                        # Mapa exacto (si hay duplicados, se queda con el más reciente por el ORDER BY DESC)
+                        mapa_comprobantes_exacto[n_compr_original] = row['ID_VENTA']
+                        # Mapa normalizado (trim y sin espacios extra)
+                        n_compr_normalizado = str(n_compr_original).strip() if n_compr_original else None
+                        if n_compr_normalizado:
+                            mapa_comprobantes_normalizado[n_compr_normalizado] = row['ID_VENTA']
 
                 sql = """
                     INSERT INTO detalle_ventas (
@@ -488,10 +504,28 @@ def cargar_excel_detalle_ventas(request, headers):
                 
                 for idx, row in df_final.iterrows():
                     n_compr = row['N°_COMPR']
-                    id_venta = mapa_comprobantes.get(n_compr)
+                    
+                    # Intentamos primero búsqueda exacta
+                    id_venta = mapa_comprobantes_exacto.get(n_compr)
+                    
+                    # Si no encontramos, intentamos con valor normalizado (trim)
+                    if id_venta is None and n_compr:
+                        n_compr_normalizado = str(n_compr).strip()
+                        id_venta = mapa_comprobantes_normalizado.get(n_compr_normalizado)
                     
                     if id_venta is None:
-                        filas_con_error.append(f"Fila {idx + 2}: N°_COMPR '{n_compr}' no encontrado en ventas_online")
+                        # Intentamos buscar valores similares en la BD para ayudar al diagnóstico
+                        valores_similares = []
+                        if n_compr:
+                            n_compr_buscar = str(n_compr).strip()
+                            for n_compr_bd, id_v in mapa_comprobantes_normalizado.items():
+                                if n_compr_buscar in n_compr_bd or n_compr_bd in n_compr_buscar:
+                                    valores_similares.append(f"'{n_compr_bd}' (ID_VENTA: {id_v})")
+                        
+                        error_msg = f"Fila {idx + 2}: N°_COMPR '{n_compr}' no encontrado en ventas_online"
+                        if valores_similares:
+                            error_msg += f". Valores similares encontrados: {', '.join(valores_similares[:3])}"
+                        filas_con_error.append(error_msg)
                         continue
                     
                     valores = (
