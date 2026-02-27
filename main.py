@@ -341,6 +341,162 @@ def cargar_excel_clientes(request, headers):
     except Exception as e:
         return (json.dumps({"error": f"Error Excel: {str(e)}"}), 500, headers)
 
+
+# --- CARGA MASIVA DESDE EXCEL: VENTAS_ONLINE ---
+def cargar_excel_ventas_online(request, headers):
+    if 'file' not in request.files:
+        return (json.dumps({"error": "No se encontró el archivo"}), 400, headers)
+
+    file = request.files['file']
+
+    try:
+        # 1. Leemos el Excel (mismo criterio que clientes_ventas)
+        df = pd.read_excel(io.BytesIO(file.read()), sheet_name='Table1')
+
+        # 2. Limpieza de nulos
+        import numpy as np
+        df = df.astype(object).replace({np.nan: None})
+
+        # 3. Columnas esperadas según tabla ventas_online
+        columnas_requeridas = [
+            'ASESOR',          # puede no venir en el Excel
+            'ID_CLIENTE',
+            'CLIENTE',
+            'TIPO_COMPROBANTE',
+            'N°_COMPR',
+            'FECHA',
+            'REGION',
+            'DISTRITO',
+            'FORMA_DE_PAGO',
+            'SALIDA_DE_PEDIDO',
+            'LINEA',
+            'CANAL_VENTA',
+            'CLASIFICACION'
+        ]
+
+        # Si no viene la columna ASESOR en el Excel, la creamos con un valor por defecto
+        if 'ASESOR' not in df.columns:
+            df['ASESOR'] = 'ONLINE'
+
+        # Validación: si falta alguna columna (excepto ASESOR, ya tratada), la creamos vacía
+        for col in columnas_requeridas:
+            if col not in df.columns:
+                df[col] = None
+
+        df_final = df[columnas_requeridas]
+
+        conn = get_connection()
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                    INSERT INTO ventas_online (
+                        ASESOR, ID_CLIENTE, CLIENTE, TIPO_COMPROBANTE,
+                        N°_COMPR, FECHA, REGION, DISTRITO,
+                        FORMA_DE_PAGO, SALIDA_DE_PEDIDO, LINEA,
+                        CANAL_VENTA, CLASIFICACION
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """
+
+                valores = [tuple(x) for x in df_final.values]
+                cursor.executemany(sql, valores)
+
+            conn.commit()
+            return (
+                json.dumps({
+                    "status": "ok",
+                    "mensaje": f"Cargadas {len(valores)} filas en ventas_online"
+                }),
+                200,
+                headers
+            )
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            return (json.dumps({"error": f"Error DB: {str(e)}"}), 500, headers)
+        finally:
+            if conn:
+                conn.close()
+
+    except Exception as e:
+        return (json.dumps({"error": f"Error Excel: {str(e)}"}), 500, headers)
+
+
+# --- CARGA MASIVA DESDE EXCEL: DETALLE_VENTAS ---
+def cargar_excel_detalle_ventas(request, headers):
+    if 'file' not in request.files:
+        return (json.dumps({"error": "No se encontró el archivo"}), 400, headers)
+
+    file = request.files['file']
+
+    try:
+        df = pd.read_excel(io.BytesIO(file.read()), sheet_name='Table1')
+
+        import numpy as np
+        df = df.astype(object).replace({np.nan: None})
+
+        # Algunas plantillas pueden traer "PRECIO_VENT" en lugar de "PRECIO_VENTA"
+        if 'PRECIO_VENTA' not in df.columns and 'PRECIO_VENT' in df.columns:
+            df['PRECIO_VENTA'] = df['PRECIO_VENT']
+
+        columnas_requeridas = [
+            'LINEA',
+            'CANAL_VENTA',
+            'N°_COMPR',
+            'CODIGO_PRODUCTO',
+            'PRODUCTO',
+            'CANTIDAD',
+            'UNIDAD_MEDIDA',
+            'PRECIO_VENTA',
+            'DELIVERY',
+            'TOTAL',
+            'ID_VENTA',
+            'CLASIFICACION',
+            'FECHA'
+        ]
+
+        # Creamos columnas faltantes como None para no romper el insert
+        for col in columnas_requeridas:
+            if col not in df.columns:
+                df[col] = None
+
+        df_final = df[columnas_requeridas]
+
+        conn = get_connection()
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                    INSERT INTO detalle_ventas (
+                        LINEA, CANAL_VENTA, N°_COMPR, CODIGO_PRODUCTO,
+                        PRODUCTO, CANTIDAD, UNIDAD_MEDIDA, PRECIO_VENTA,
+                        DELIVERY, TOTAL, ID_VENTA, CLASIFICACION, FECHA
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """
+
+                valores = [tuple(x) for x in df_final.values]
+                cursor.executemany(sql, valores)
+
+            conn.commit()
+            return (
+                json.dumps({
+                    "status": "ok",
+                    "mensaje": f"Cargadas {len(valores)} filas en detalle_ventas"
+                }),
+                200,
+                headers
+            )
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            return (json.dumps({"error": f"Error DB: {str(e)}"}), 500, headers)
+        finally:
+            if conn:
+                conn.close()
+
+    except Exception as e:
+        return (json.dumps({"error": f"Error Excel: {str(e)}"}), 500, headers)
+
 # --- PUNTO DE ENTRADA ---
 @functions_framework.http
 def reporte_ventas_online(request):
@@ -369,7 +525,17 @@ def reporte_ventas_online(request):
     elif request.method == "POST":
         # CASO 1: Carga masiva por Excel (multipart/form-data)
         if 'file' in request.files:
-            return cargar_excel_clientes(request, headers)
+            modo = request.args.get("modo")
+            # clientes_ventas (modo por defecto o explícito)
+            if modo in [None, "", "clientes_excel"]:
+                return cargar_excel_clientes(request, headers)
+            # nuevas funciones temporales para subir ventas y detalle desde Excel
+            elif modo == "ventas_excel":
+                return cargar_excel_ventas_online(request, headers)
+            elif modo == "detalle_excel":
+                return cargar_excel_detalle_ventas(request, headers)
+            else:
+                return (json.dumps({"error": "Modo de carga Excel no reconocido"}), 400, headers)
         
         # CASO 2: Inserción manual o Venta completa (JSON)
         data = request.get_json(silent=True)
