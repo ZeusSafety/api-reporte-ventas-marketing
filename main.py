@@ -439,6 +439,10 @@ def cargar_excel_detalle_ventas(request, headers):
         if 'PRECIO_VENTA' not in df.columns and 'PRECIO_VENT' in df.columns:
             df['PRECIO_VENTA'] = df['PRECIO_VENT']
 
+        # Validamos que N°_COMPR exista (es crítico para buscar ID_VENTA)
+        if 'N°_COMPR' not in df.columns:
+            return (json.dumps({"error": "El Excel debe contener la columna 'N°_COMPR'"}), 400, headers)
+
         columnas_requeridas = [
             'LINEA',
             'CANAL_VENTA',
@@ -450,7 +454,6 @@ def cargar_excel_detalle_ventas(request, headers):
             'PRECIO_VENTA',
             'DELIVERY',
             'TOTAL',
-            'ID_VENTA',
             'CLASIFICACION',
             'FECHA'
         ]
@@ -465,6 +468,11 @@ def cargar_excel_detalle_ventas(request, headers):
         conn = get_connection()
         try:
             with conn.cursor() as cursor:
+                # Primero, creamos un diccionario que mapea N°_COMPR -> ID_VENTA
+                # Esto evita el error de foreign key porque usamos el ID_VENTA real de la BD
+                cursor.execute("SELECT ID_VENTA, N°_COMPR FROM ventas_online")
+                mapa_comprobantes = {row['N°_COMPR']: row['ID_VENTA'] for row in cursor.fetchall()}
+
                 sql = """
                     INSERT INTO detalle_ventas (
                         LINEA, CANAL_VENTA, N°_COMPR, CODIGO_PRODUCTO,
@@ -474,14 +482,49 @@ def cargar_excel_detalle_ventas(request, headers):
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
 
-                valores = [tuple(x) for x in df_final.values]
-                cursor.executemany(sql, valores)
+                # Procesamos fila por fila para buscar el ID_VENTA correcto
+                filas_insertadas = 0
+                filas_con_error = []
+                
+                for idx, row in df_final.iterrows():
+                    n_compr = row['N°_COMPR']
+                    id_venta = mapa_comprobantes.get(n_compr)
+                    
+                    if id_venta is None:
+                        filas_con_error.append(f"Fila {idx + 2}: N°_COMPR '{n_compr}' no encontrado en ventas_online")
+                        continue
+                    
+                    valores = (
+                        row['LINEA'],
+                        row['CANAL_VENTA'],
+                        n_compr,
+                        row['CODIGO_PRODUCTO'],
+                        row['PRODUCTO'],
+                        row['CANTIDAD'],
+                        row['UNIDAD_MEDIDA'],
+                        row['PRECIO_VENTA'],
+                        row['DELIVERY'],
+                        row['TOTAL'],
+                        id_venta,  # Usamos el ID_VENTA real de la BD
+                        row['CLASIFICACION'],
+                        row['FECHA']
+                    )
+                    
+                    cursor.execute(sql, valores)
+                    filas_insertadas += 1
 
             conn.commit()
+            
+            mensaje = f"Cargadas {filas_insertadas} filas en detalle_ventas"
+            if filas_con_error:
+                mensaje += f". Advertencias: {len(filas_con_error)} filas no se insertaron (N°_COMPR no encontrado)"
+            
             return (
                 json.dumps({
                     "status": "ok",
-                    "mensaje": f"Cargadas {len(valores)} filas en detalle_ventas"
+                    "mensaje": mensaje,
+                    "filas_insertadas": filas_insertadas,
+                    "errores": filas_con_error if filas_con_error else None
                 }),
                 200,
                 headers
