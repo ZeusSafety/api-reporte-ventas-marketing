@@ -290,21 +290,21 @@ def cargar_excel_clientes(request, headers):
     file = request.files['file']
     
     try:
+        # 1. Leemos el Excel
         df = pd.read_excel(io.BytesIO(file.read()), sheet_name='Table1')
 
-        # --- CORRECCIÓN AQUÍ ---
-        # 1. Reemplazamos NaN (not a number) por None (compatible con MySQL)
-        # Usamos replace con numpy para asegurar que cubrimos todos los tipos de nulos
+        # 2. Limpieza de nulos (Fundamenta para evitar el error 'nan can not be used with MySQL')
         import numpy as np
-        df = df.replace({np.nan: None})
+        # Convertimos a objeto y reemplazamos NaNs por None (NULL en MySQL)
+        df = df.astype(object).replace({np.nan: None})
 
-        # 2. Seleccionamos las columnas
+        # 3. Seleccionamos las columnas INCLUYENDO ID_CLIENTE
         columnas_requeridas = [
-            'FECHA', 'CLIENTE', 'TELEFONO', 'RUC', 'DNI', 
+            'ID_CLIENTE', 'FECHA', 'CLIENTE', 'TELEFONO', 'RUC', 'DNI', 
             'REGION', 'DISTRITO', 'TIPO_CLIENTE', 'CANAL_ORIGEN'
         ]
         
-        # Nos aseguramos de que si faltan columnas en el Excel no rompa el código
+        # Validación de seguridad: si falta alguna columna, la crea vacía para no romper el script
         for col in columnas_requeridas:
             if col not in df.columns:
                 df[col] = None
@@ -314,23 +314,29 @@ def cargar_excel_clientes(request, headers):
         conn = get_connection()
         try:
             with conn.cursor() as cursor:
-                sql = """INSERT INTO clientes_ventas (FECHA, CLIENTE, TELEFONO, RUC, DNI, REGION, 
+                # 4. Ajuste del SQL: Agregamos ID_CLIENTE al inicio
+                sql = """INSERT INTO clientes_ventas (ID_CLIENTE, FECHA, CLIENTE, TELEFONO, RUC, DNI, REGION, 
                          DISTRITO, TIPO_CLIENTE, CANAL_ORIGEN) 
-                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
                 
                 # Convertimos filas a tuplas
                 valores = [tuple(x) for x in df_final.values]
                 
+                # Ejecución masiva
                 cursor.executemany(sql, valores)
                 
             conn.commit()
-            return (json.dumps({"status": "ok", "mensaje": f"Cargados {len(valores)} clientes"}), 200, headers)
+            return (json.dumps({"status": "ok", "mensaje": f"Cargados {len(valores)} clientes exitosamente"}), 200, headers)
             
         except Exception as e:
-            conn.rollback()
-            return (json.dumps({"error": f"Error DB: {str(e)}"}), 500, headers)
+            if conn: conn.rollback()
+            # Manejo específico por si el ID ya existe (Duplicate Entry)
+            error_msg = str(e)
+            if "Duplicate entry" in error_msg:
+                error_msg = f"Error: Uno o más IDs ya existen en la base de datos. Detalles: {error_msg}"
+            return (json.dumps({"error": f"Error DB: {error_msg}"}), 500, headers)
         finally:
-            conn.close()
+            if conn: conn.close()
 
     except Exception as e:
         return (json.dumps({"error": f"Error Excel: {str(e)}"}), 500, headers)
