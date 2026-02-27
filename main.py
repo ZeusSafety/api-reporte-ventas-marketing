@@ -357,9 +357,10 @@ def cargar_excel_ventas_online(request, headers):
         import numpy as np
         df = df.astype(object).replace({np.nan: None})
 
-        # 3. Columnas esperadas según tabla ventas_online
+        # 3. Columnas esperadas según tabla ventas_online (INCLUYENDO ID_VENTA)
         columnas_requeridas = [
-            'ASESOR',          # puede no venir en el Excel
+            'ID_VENTA',         # Debe venir en el Excel (sin AUTO_INCREMENT)
+            'ASESOR',           # puede no venir en el Excel
             'ID_CLIENTE',
             'CLIENTE',
             'TIPO_COMPROBANTE',
@@ -390,12 +391,12 @@ def cargar_excel_ventas_online(request, headers):
             with conn.cursor() as cursor:
                 sql = """
                     INSERT INTO ventas_online (
-                        ASESOR, ID_CLIENTE, CLIENTE, TIPO_COMPROBANTE,
+                        ID_VENTA, ASESOR, ID_CLIENTE, CLIENTE, TIPO_COMPROBANTE,
                         N°_COMPR, FECHA, REGION, DISTRITO,
                         FORMA_DE_PAGO, SALIDA_DE_PEDIDO, LINEA,
                         CANAL_VENTA, CLASIFICACION
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
 
                 valores = [tuple(x) for x in df_final.values]
@@ -439,11 +440,9 @@ def cargar_excel_detalle_ventas(request, headers):
         if 'PRECIO_VENTA' not in df.columns and 'PRECIO_VENT' in df.columns:
             df['PRECIO_VENTA'] = df['PRECIO_VENT']
 
-        # Validamos que N°_COMPR exista (es crítico para buscar ID_VENTA)
-        if 'N°_COMPR' not in df.columns:
-            return (json.dumps({"error": "El Excel debe contener la columna 'N°_COMPR'"}), 400, headers)
-
+        # 3. Columnas esperadas según tabla detalle_ventas (INCLUYENDO ID_VENTA e ID_DETALLE)
         columnas_requeridas = [
+            'ID_DETALLE',       # Debe venir en el Excel (sin AUTO_INCREMENT)
             'LINEA',
             'CANAL_VENTA',
             'N°_COMPR',
@@ -454,6 +453,7 @@ def cargar_excel_detalle_ventas(request, headers):
             'PRECIO_VENTA',
             'DELIVERY',
             'TOTAL',
+            'ID_VENTA',         # Debe venir en el Excel (sin AUTO_INCREMENT)
             'CLASIFICACION',
             'FECHA'
         ]
@@ -468,97 +468,23 @@ def cargar_excel_detalle_ventas(request, headers):
         conn = get_connection()
         try:
             with conn.cursor() as cursor:
-                # Primero, creamos un diccionario que mapea N°_COMPR -> ID_VENTA
-                # Normalizamos los valores (trim) para evitar problemas con espacios
-                # Si hay múltiples registros con el mismo N°_COMPR, tomamos el ID_VENTA más reciente (mayor)
-                cursor.execute("SELECT ID_VENTA, N°_COMPR FROM ventas_online ORDER BY ID_VENTA DESC")
-                resultados = cursor.fetchall()
-                
-                # Creamos dos mapas: uno exacto y otro normalizado (sin espacios)
-                # Si hay duplicados, el último (más reciente) sobrescribe el anterior
-                mapa_comprobantes_exacto = {}
-                mapa_comprobantes_normalizado = {}
-                
-                for row in resultados:
-                    n_compr_original = row['N°_COMPR']
-                    if n_compr_original:
-                        # Mapa exacto (si hay duplicados, se queda con el más reciente por el ORDER BY DESC)
-                        mapa_comprobantes_exacto[n_compr_original] = row['ID_VENTA']
-                        # Mapa normalizado (trim y sin espacios extra)
-                        n_compr_normalizado = str(n_compr_original).strip() if n_compr_original else None
-                        if n_compr_normalizado:
-                            mapa_comprobantes_normalizado[n_compr_normalizado] = row['ID_VENTA']
-
                 sql = """
                     INSERT INTO detalle_ventas (
-                        LINEA, CANAL_VENTA, N°_COMPR, CODIGO_PRODUCTO,
+                        ID_DETALLE, LINEA, CANAL_VENTA, N°_COMPR, CODIGO_PRODUCTO,
                         PRODUCTO, CANTIDAD, UNIDAD_MEDIDA, PRECIO_VENTA,
                         DELIVERY, TOTAL, ID_VENTA, CLASIFICACION, FECHA
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
 
-                # Procesamos fila por fila para buscar el ID_VENTA correcto
-                filas_insertadas = 0
-                filas_con_error = []
-                
-                for idx, row in df_final.iterrows():
-                    n_compr = row['N°_COMPR']
-                    
-                    # Intentamos primero búsqueda exacta
-                    id_venta = mapa_comprobantes_exacto.get(n_compr)
-                    
-                    # Si no encontramos, intentamos con valor normalizado (trim)
-                    if id_venta is None and n_compr:
-                        n_compr_normalizado = str(n_compr).strip()
-                        id_venta = mapa_comprobantes_normalizado.get(n_compr_normalizado)
-                    
-                    if id_venta is None:
-                        # Intentamos buscar valores similares en la BD para ayudar al diagnóstico
-                        valores_similares = []
-                        if n_compr:
-                            n_compr_buscar = str(n_compr).strip()
-                            for n_compr_bd, id_v in mapa_comprobantes_normalizado.items():
-                                if n_compr_buscar in n_compr_bd or n_compr_bd in n_compr_buscar:
-                                    valores_similares.append(f"'{n_compr_bd}' (ID_VENTA: {id_v})")
-                        
-                        error_msg = f"Fila {idx + 2}: N°_COMPR '{n_compr}' no encontrado en ventas_online"
-                        if valores_similares:
-                            error_msg += f". Valores similares encontrados: {', '.join(valores_similares[:3])}"
-                        filas_con_error.append(error_msg)
-                        continue
-                    
-                    valores = (
-                        row['LINEA'],
-                        row['CANAL_VENTA'],
-                        n_compr,
-                        row['CODIGO_PRODUCTO'],
-                        row['PRODUCTO'],
-                        row['CANTIDAD'],
-                        row['UNIDAD_MEDIDA'],
-                        row['PRECIO_VENTA'],
-                        row['DELIVERY'],
-                        row['TOTAL'],
-                        id_venta,  # Usamos el ID_VENTA real de la BD
-                        row['CLASIFICACION'],
-                        row['FECHA']
-                    )
-                    
-                    cursor.execute(sql, valores)
-                    filas_insertadas += 1
+                valores = [tuple(x) for x in df_final.values]
+                cursor.executemany(sql, valores)
 
             conn.commit()
-            
-            mensaje = f"Cargadas {filas_insertadas} filas en detalle_ventas"
-            if filas_con_error:
-                mensaje += f". Advertencias: {len(filas_con_error)} filas no se insertaron (N°_COMPR no encontrado)"
-            
             return (
                 json.dumps({
                     "status": "ok",
-                    "mensaje": mensaje,
-                    "filas_insertadas": filas_insertadas,
-                    "errores": filas_con_error if filas_con_error else None
+                    "mensaje": f"Cargadas {len(valores)} filas en detalle_ventas"
                 }),
                 200,
                 headers
