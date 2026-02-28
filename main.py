@@ -84,12 +84,53 @@ def obtener_metricas_dashboard(request, headers):
                 clasificaciones = fetch_all_safe(cursor) if cursor.nextset() else []
                 lineas = fetch_all_safe(cursor) if cursor.nextset() else []
 
+                # Procesar clasificaciones: agregar conteo de registros (COUNT) además del total
+                # Hacer consulta única para obtener todos los conteos agrupados
+                # Construir WHERE con los mismos filtros que el SP (excepto clasificación)
+                where_conditions = ["FECHA BETWEEN %s AND %s"]
+                params = [f_inicio, f_fin]
+                
+                if p_prod:
+                    where_conditions.append("EXISTS (SELECT 1 FROM detalle_ventas dv WHERE dv.ID_VENTA = vo.ID_VENTA AND dv.PRODUCTO LIKE %s)")
+                    params.append(f"%{p_prod}%")
+                if p_mes:
+                    where_conditions.append("MONTH(FECHA) = %s AND YEAR(FECHA) = %s")
+                    mes_parts = p_mes.split('-')
+                    if len(mes_parts) == 2:
+                        params.extend([mes_parts[1], mes_parts[0]])
+                if p_canal:
+                    where_conditions.append("CANAL_VENTA = %s")
+                    params.append(p_canal)
+                if p_linea:
+                    where_conditions.append("LINEA = %s")
+                    params.append(p_linea)
+                
+                sql_count = f"""SELECT CLASIFICACION, COUNT(*) as total_registros 
+                               FROM ventas_online vo
+                               WHERE {' AND '.join(where_conditions)}
+                               GROUP BY CLASIFICACION"""
+                cursor.execute(sql_count, params)
+                counts_map = {}
+                for row in cursor.fetchall():
+                    clasi_key = row.get('CLASIFICACION') or row.get('clasificacion')
+                    if clasi_key:
+                        counts_map[clasi_key] = row.get('total_registros', 0)
+
+                # Agregar total_registros a cada clasificación
+                clasificaciones_procesadas = []
+                for clasi in clasificaciones:
+                    clasi_name = clasi.get('clasificacion_pedido') or clasi.get('CLASIFICACION_PEDIDO') or clasi.get('clasificacion') or clasi.get('CLASIFICACION') or clasi.get('nombre') or clasi.get('NOMBRE')
+                    if clasi_name and clasi_name in counts_map:
+                        clasi['total_registros'] = counts_map[clasi_name]
+                        clasi['TOTAL_REGISTROS'] = counts_map[clasi_name]
+                    clasificaciones_procesadas.append(clasi)
+
                 result = {
                     "kpis": kpi_data,
                     "ventas_por_mes": ventas_mes,
                     "productos_top": prod_top, # Ahora lleva los datos mapeados correctamente
                     "canales_venta": canales,
-                    "clasificacion_pedidos": clasificaciones,
+                    "clasificacion_pedidos": clasificaciones_procesadas,
                     "lineas": lineas
                 }
             # --- REPORTE GENERAL 2: OPERATIVO Y CLIENTES ---
