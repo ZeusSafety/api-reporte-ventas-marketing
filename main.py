@@ -84,6 +84,46 @@ def obtener_metricas_dashboard(request, headers):
                 clasificaciones = fetch_all_safe(cursor) if cursor.nextset() else []
                 lineas = fetch_all_safe(cursor) if cursor.nextset() else []
 
+                # Procesar líneas: agregar conteo de registros (COUNT) además del total
+                # Construir WHERE con los mismos filtros que el SP (excepto linea)
+                where_conditions_lineas = ["FECHA BETWEEN %s AND %s"]
+                params_lineas = [f_inicio, f_fin]
+                
+                if p_prod:
+                    where_conditions_lineas.append("EXISTS (SELECT 1 FROM detalle_ventas dv WHERE dv.ID_VENTA = vo.ID_VENTA AND dv.PRODUCTO LIKE %s)")
+                    params_lineas.append(f"%{p_prod}%")
+                if p_mes:
+                    where_conditions_lineas.append("MONTH(FECHA) = %s AND YEAR(FECHA) = %s")
+                    mes_parts = p_mes.split('-')
+                    if len(mes_parts) == 2:
+                        params_lineas.extend([mes_parts[1], mes_parts[0]])
+                if p_canal:
+                    where_conditions_lineas.append("CANAL_VENTA = %s")
+                    params_lineas.append(p_canal)
+                if p_clasi:
+                    where_conditions_lineas.append("CLASIFICACION = %s")
+                    params_lineas.append(p_clasi)
+                
+                sql_count_lineas = f"""SELECT LINEA, COUNT(*) as total_registros 
+                                      FROM ventas_online vo
+                                      WHERE {' AND '.join(where_conditions_lineas)}
+                                      GROUP BY LINEA"""
+                cursor.execute(sql_count_lineas, params_lineas)
+                counts_map_lineas = {}
+                for row in cursor.fetchall():
+                    linea_key = row.get('LINEA') or row.get('linea')
+                    if linea_key:
+                        counts_map_lineas[linea_key] = row.get('total_registros', 0)
+
+                # Agregar total_registros a cada línea
+                lineas_procesadas = []
+                for linea in lineas:
+                    linea_name = linea.get('LINEA') or linea.get('linea') or linea.get('nombre') or linea.get('NOMBRE') or linea.get('descripcion') or linea.get('DESCRIPCION')
+                    if linea_name and linea_name in counts_map_lineas:
+                        linea['total_registros'] = counts_map_lineas[linea_name]
+                        linea['TOTAL_REGISTROS'] = counts_map_lineas[linea_name]
+                    lineas_procesadas.append(linea)
+
                 # Procesar clasificaciones: agregar conteo de registros (COUNT) además del total
                 # Hacer consulta única para obtener todos los conteos agrupados
                 # Construir WHERE con los mismos filtros que el SP (excepto clasificación)
@@ -131,7 +171,7 @@ def obtener_metricas_dashboard(request, headers):
                     "productos_top": prod_top, # Ahora lleva los datos mapeados correctamente
                     "canales_venta": canales,
                     "clasificacion_pedidos": clasificaciones_procesadas,
-                    "lineas": lineas
+                    "lineas": lineas_procesadas
                 }
             # --- REPORTE GENERAL 2: OPERATIVO Y CLIENTES ---
             elif tipo == "full_reporte_2":
