@@ -433,7 +433,20 @@ def obtener_metricas_dashboard(request, headers):
                 canales = []
                 if cursor.nextset(): canales = fetch_all_safe(cursor)
 
+                # 5. Ventas por Región
+                regiones = []
+                if cursor.nextset(): regiones = fetch_all_safe(cursor)
+
+                # 6. Tipos de Pago
+                pagos = []
+                if cursor.nextset(): pagos = fetch_all_safe(cursor)
+
+                # 7. Ventas por Mes (Tendencia inferior)
+                ventas_mes = []
+                if cursor.nextset(): ventas_mes = fetch_all_safe(cursor)
+
                 # Procesar canales: agregar cantidad_pedidos (COUNT de pedidos) además del monto_total
+                # Esto se hace DESPUÉS de obtener todos los resultados del stored procedure
                 # Construir WHERE con los mismos filtros que el SP
                 where_conditions_canales_electric = ["v.FECHA BETWEEN %s AND %s"]
                 params_canales_electric = [f_inicio, f_fin]
@@ -478,18 +491,6 @@ def obtener_metricas_dashboard(request, headers):
                         canal['cantidad_pedidos'] = counts_map_canales_electric[canal_name]
                         canal['CANTIDAD_PEDIDOS'] = counts_map_canales_electric[canal_name]
                     canales_procesados_electric.append(canal)
-
-                # 5. Ventas por Región
-                regiones = []
-                if cursor.nextset(): regiones = fetch_all_safe(cursor)
-
-                # 6. Tipos de Pago
-                pagos = []
-                if cursor.nextset(): pagos = fetch_all_safe(cursor)
-
-                # 7. Ventas por Mes (Tendencia inferior)
-                ventas_mes = []
-                if cursor.nextset(): ventas_mes = fetch_all_safe(cursor)
 
                 result = {
                     "kpis": kpi_data,
