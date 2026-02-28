@@ -482,11 +482,60 @@ def obtener_metricas_dashboard(request, headers):
                 pagos = fetch_all_safe(cursor) if cursor.nextset() else []
                 ventas_mes = fetch_all_safe(cursor) if cursor.nextset() else []
 
+                # Procesar canales: agregar numero_de_pedidos (COUNT de pedidos) además del monto_total
+                # Construir WHERE con los mismos filtros que el SP
+                where_conditions_canales = ["v.FECHA BETWEEN %s AND %s"]
+                params_canales = [f_inicio, f_fin]
+                
+                if p_prod:
+                    where_conditions_canales.append("EXISTS (SELECT 1 FROM detalle_ventas dv2 WHERE dv2.ID_VENTA = v.ID_VENTA AND dv2.PRODUCTO LIKE %s)")
+                    params_canales.append(f"%{p_prod}%")
+                
+                if p_mes:
+                    where_conditions_canales.append("MONTH(v.FECHA) = %s AND YEAR(v.FECHA) = %s")
+                    mes_parts = p_mes.split('-')
+                    if len(mes_parts) == 2:
+                        params_canales.extend([mes_parts[1], mes_parts[0]])
+                
+                if p_clasi:
+                    where_conditions_canales.append("v.CLASIFICACION = %s")
+                    params_canales.append(p_clasi)
+                
+                if p_linea:
+                    where_conditions_canales.append("v.LINEA = %s")
+                    params_canales.append(p_linea)
+                
+                # Nota: No filtramos por p_canal aquí porque queremos el COUNT de todos los canales
+                # El filtro de canal se aplica en el stored procedure para otros datos
+                
+                # Calcular numero_de_pedidos (COUNT de pedidos) por canal
+                sql_canales_count = f"""SELECT 
+                                          v.CANAL_VENTA,
+                                          COUNT(DISTINCT v.ID_VENTA) as numero_de_pedidos
+                                        FROM ventas_online v
+                                        WHERE {' AND '.join(where_conditions_canales)}
+                                        GROUP BY v.CANAL_VENTA"""
+                cursor.execute(sql_canales_count, params_canales)
+                counts_map_canales = {}
+                for row in cursor.fetchall():
+                    canal_key = row.get('CANAL_VENTA') or row.get('canal_venta')
+                    if canal_key:
+                        counts_map_canales[canal_key] = row.get('numero_de_pedidos', 0)
+
+                # Agregar numero_de_pedidos a cada canal
+                canales_procesados = []
+                for canal in canales:
+                    canal_name = canal.get('canal_venta') or canal.get('CANAL_VENTA') or canal.get('canal') or canal.get('CANAL') or canal.get('nombre') or canal.get('NOMBRE')
+                    if canal_name and canal_name in counts_map_canales:
+                        canal['numero_de_pedidos'] = counts_map_canales[canal_name]
+                        canal['NUMERO_DE_PEDIDOS'] = counts_map_canales[canal_name]
+                    canales_procesados.append(canal)
+
                 result = {
                     "kpis": kpi_data,
                     "clientes": clientes,
                     "productos_vendidos": productos,
-                    "canal_ventas": canales,
+                    "canal_ventas": canales_procesados,  # Usar los procesados con numero_de_pedidos
                     "ventas_region": regiones,
                     "tipos_pago": pagos,
                     "ventas_por_mes": ventas_mes
