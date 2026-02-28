@@ -213,7 +213,7 @@ def obtener_metricas_dashboard(request, headers):
                 # Procesar líneas: agregar conteo de registros (COUNT) además del total
                 # Construir WHERE con los mismos filtros que el SP (excepto linea)
                 # Soporta selección múltiple con IN clauses
-                where_conditions_lineas = ["FECHA BETWEEN %s AND %s"]
+                where_conditions_lineas = ["vo.FECHA BETWEEN %s AND %s"]
                 params_lineas = [f_inicio, f_fin]
                 
                 if p_prod_list:
@@ -230,7 +230,7 @@ def obtener_metricas_dashboard(request, headers):
                 if p_mes_list:
                     # Múltiples meses: construir condiciones OR
                     if len(p_mes_list) == 1:
-                        where_conditions_lineas.append("MONTH(FECHA) = %s AND YEAR(FECHA) = %s")
+                        where_conditions_lineas.append("MONTH(vo.FECHA) = %s AND YEAR(vo.FECHA) = %s")
                         mes_parts = p_mes_list[0].split('-')
                         if len(mes_parts) == 2:
                             params_lineas.extend([mes_parts[1], mes_parts[0]])
@@ -240,27 +240,27 @@ def obtener_metricas_dashboard(request, headers):
                         for mes_val in p_mes_list:
                             mes_parts = mes_val.split('-')
                             if len(mes_parts) == 2:
-                                mes_conditions.append("(MONTH(FECHA) = %s AND YEAR(FECHA) = %s)")
+                                mes_conditions.append("(MONTH(vo.FECHA) = %s AND YEAR(vo.FECHA) = %s)")
                                 params_lineas.extend([mes_parts[1], mes_parts[0]])
                         if mes_conditions:
                             where_conditions_lineas.append(f"({' OR '.join(mes_conditions)})")
                 
                 if p_canal_list:
                     if len(p_canal_list) == 1:
-                        where_conditions_lineas.append("CANAL_VENTA = %s")
+                        where_conditions_lineas.append("vo.CANAL_VENTA = %s")
                         params_lineas.append(p_canal_list[0])
                     else:
                         placeholders = ','.join(['%s'] * len(p_canal_list))
-                        where_conditions_lineas.append(f"CANAL_VENTA IN ({placeholders})")
+                        where_conditions_lineas.append(f"vo.CANAL_VENTA IN ({placeholders})")
                         params_lineas.extend(p_canal_list)
                 
                 if p_clasi_list:
                     if len(p_clasi_list) == 1:
-                        where_conditions_lineas.append("CLASIFICACION = %s")
+                        where_conditions_lineas.append("vo.CLASIFICACION = %s")
                         params_lineas.append(p_clasi_list[0])
                     else:
                         placeholders = ','.join(['%s'] * len(p_clasi_list))
-                        where_conditions_lineas.append(f"CLASIFICACION IN ({placeholders})")
+                        where_conditions_lineas.append(f"vo.CLASIFICACION IN ({placeholders})")
                         params_lineas.extend(p_clasi_list)
                 
                 sql_count_lineas = f"""SELECT LINEA, COUNT(*) as total_registros 
@@ -278,16 +278,16 @@ def obtener_metricas_dashboard(request, headers):
                 lineas_procesadas = []
                 for linea in lineas:
                     linea_name = linea.get('LINEA') or linea.get('linea') or linea.get('nombre') or linea.get('NOMBRE') or linea.get('descripcion') or linea.get('DESCRIPCION')
-                    if linea_name and linea_name in counts_map_lineas:
-                        linea['total_registros'] = counts_map_lineas[linea_name]
-                        linea['TOTAL_REGISTROS'] = counts_map_lineas[linea_name]
+                    # Siempre agregar total_registros, usar 0 si no está en el mapa (no hay registros para este filtro)
+                    linea['total_registros'] = counts_map_lineas.get(linea_name, 0) if linea_name else 0
+                    linea['TOTAL_REGISTROS'] = counts_map_lineas.get(linea_name, 0) if linea_name else 0
                     lineas_procesadas.append(linea)
 
                 # Procesar clasificaciones: agregar conteo de registros (COUNT) además del total
                 # Hacer consulta única para obtener todos los conteos agrupados
                 # Construir WHERE con los mismos filtros que el SP (excepto clasificación)
                 # Soporta selección múltiple con IN clauses
-                where_conditions = ["FECHA BETWEEN %s AND %s"]
+                where_conditions = ["vo.FECHA BETWEEN %s AND %s"]
                 params = [f_inicio, f_fin]
                 
                 if p_prod_list:
@@ -301,7 +301,7 @@ def obtener_metricas_dashboard(request, headers):
                 
                 if p_mes_list:
                     if len(p_mes_list) == 1:
-                        where_conditions.append("MONTH(FECHA) = %s AND YEAR(FECHA) = %s")
+                        where_conditions.append("MONTH(vo.FECHA) = %s AND YEAR(vo.FECHA) = %s")
                         mes_parts = p_mes_list[0].split('-')
                         if len(mes_parts) == 2:
                             params.extend([mes_parts[1], mes_parts[0]])
@@ -310,27 +310,27 @@ def obtener_metricas_dashboard(request, headers):
                         for mes_val in p_mes_list:
                             mes_parts = mes_val.split('-')
                             if len(mes_parts) == 2:
-                                mes_conditions.append("(MONTH(FECHA) = %s AND YEAR(FECHA) = %s)")
+                                mes_conditions.append("(MONTH(vo.FECHA) = %s AND YEAR(vo.FECHA) = %s)")
                                 params.extend([mes_parts[1], mes_parts[0]])
                         if mes_conditions:
                             where_conditions.append(f"({' OR '.join(mes_conditions)})")
                 
                 if p_canal_list:
                     if len(p_canal_list) == 1:
-                        where_conditions.append("CANAL_VENTA = %s")
+                        where_conditions.append("vo.CANAL_VENTA = %s")
                         params.append(p_canal_list[0])
                     else:
                         placeholders = ','.join(['%s'] * len(p_canal_list))
-                        where_conditions.append(f"CANAL_VENTA IN ({placeholders})")
+                        where_conditions.append(f"vo.CANAL_VENTA IN ({placeholders})")
                         params.extend(p_canal_list)
                 
                 if p_linea_list:
                     if len(p_linea_list) == 1:
-                        where_conditions.append("LINEA = %s")
+                        where_conditions.append("vo.LINEA = %s")
                         params.append(p_linea_list[0])
                     else:
                         placeholders = ','.join(['%s'] * len(p_linea_list))
-                        where_conditions.append(f"LINEA IN ({placeholders})")
+                        where_conditions.append(f"vo.LINEA IN ({placeholders})")
                         params.extend(p_linea_list)
                 
                 sql_count = f"""SELECT CLASIFICACION, COUNT(*) as total_registros 
@@ -348,9 +348,9 @@ def obtener_metricas_dashboard(request, headers):
                 clasificaciones_procesadas = []
                 for clasi in clasificaciones:
                     clasi_name = clasi.get('clasificacion_pedido') or clasi.get('CLASIFICACION_PEDIDO') or clasi.get('clasificacion') or clasi.get('CLASIFICACION') or clasi.get('nombre') or clasi.get('NOMBRE')
-                    if clasi_name and clasi_name in counts_map:
-                        clasi['total_registros'] = counts_map[clasi_name]
-                        clasi['TOTAL_REGISTROS'] = counts_map[clasi_name]
+                    # Siempre agregar total_registros, usar 0 si no está en el mapa (no hay registros para este filtro)
+                    clasi['total_registros'] = counts_map.get(clasi_name, 0) if clasi_name else 0
+                    clasi['TOTAL_REGISTROS'] = counts_map.get(clasi_name, 0) if clasi_name else 0
                     clasificaciones_procesadas.append(clasi)
 
                 result = {
