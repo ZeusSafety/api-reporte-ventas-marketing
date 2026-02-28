@@ -48,13 +48,36 @@ def obtener_metricas_dashboard(request, headers):
             # --- REPORTE GENERAL 1: GESTIÓN Y VENTAS ---
             if tipo == "full_reporte_1":
                 # 1. Captura adaptativa: busca 'producto' (front) o 'p_prod' (variable interna)
-                p_prod = request.args.get("producto") or request.args.get("p_prod")
-                p_mes = request.args.get("mes")
-                p_canal = request.args.get("canal")
-                p_clasi = request.args.get("clasificacion") or request.args.get("clasi")
-                p_linea = request.args.get("linea")
+                # Soporta selección múltiple: valores separados por comas
+                p_prod_raw = request.args.get("producto") or request.args.get("p_prod")
+                p_mes_raw = request.args.get("mes")
+                p_canal_raw = request.args.get("canal")
+                p_clasi_raw = request.args.get("clasificacion") or request.args.get("clasi")
+                p_linea_raw = request.args.get("linea")
 
-                # 2. Ejecución del SP
+                # Parsear valores múltiples (separados por comas)
+                def parse_multiple(val):
+                    if not val or val in ["null", "", "undefined", "None"]:
+                        return []
+                    # Si contiene comas, es múltiple
+                    if ',' in str(val):
+                        return [v.strip() for v in str(val).split(',') if v.strip()]
+                    return [str(val).strip()]
+
+                p_prod_list = parse_multiple(p_prod_raw)
+                p_mes_list = parse_multiple(p_mes_raw)
+                p_canal_list = parse_multiple(p_canal_raw)
+                p_clasi_list = parse_multiple(p_clasi_raw)
+                p_linea_list = parse_multiple(p_linea_raw)
+
+                # Para compatibilidad con SP: usar primer valor o None
+                p_prod = p_prod_list[0] if p_prod_list else None
+                p_mes = p_mes_list[0] if p_mes_list else None
+                p_canal = p_canal_list[0] if p_canal_list else None
+                p_clasi = p_clasi_list[0] if p_clasi_list else None
+                p_linea = p_linea_list[0] if p_linea_list else None
+
+                # 2. Ejecución del SP (usa primer valor para compatibilidad)
                 cursor.callproc('sp_Dashboard_General1', (
                     n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), f_inicio, f_fin
                 ))
@@ -86,23 +109,56 @@ def obtener_metricas_dashboard(request, headers):
 
                 # Procesar líneas: agregar conteo de registros (COUNT) además del total
                 # Construir WHERE con los mismos filtros que el SP (excepto linea)
+                # Soporta selección múltiple con IN clauses
                 where_conditions_lineas = ["FECHA BETWEEN %s AND %s"]
                 params_lineas = [f_inicio, f_fin]
                 
-                if p_prod:
-                    where_conditions_lineas.append("EXISTS (SELECT 1 FROM detalle_ventas dv WHERE dv.ID_VENTA = vo.ID_VENTA AND dv.PRODUCTO LIKE %s)")
-                    params_lineas.append(f"%{p_prod}%")
-                if p_mes:
-                    where_conditions_lineas.append("MONTH(FECHA) = %s AND YEAR(FECHA) = %s")
-                    mes_parts = p_mes.split('-')
-                    if len(mes_parts) == 2:
-                        params_lineas.extend([mes_parts[1], mes_parts[0]])
-                if p_canal:
-                    where_conditions_lineas.append("CANAL_VENTA = %s")
-                    params_lineas.append(p_canal)
-                if p_clasi:
-                    where_conditions_lineas.append("CLASIFICACION = %s")
-                    params_lineas.append(p_clasi)
+                if p_prod_list:
+                    # Si hay múltiples productos, usar IN con subconsulta
+                    if len(p_prod_list) == 1:
+                        where_conditions_lineas.append("EXISTS (SELECT 1 FROM detalle_ventas dv WHERE dv.ID_VENTA = vo.ID_VENTA AND dv.PRODUCTO LIKE %s)")
+                        params_lineas.append(f"%{p_prod_list[0]}%")
+                    else:
+                        # Múltiples productos: usar IN
+                        placeholders = ','.join(['%s'] * len(p_prod_list))
+                        where_conditions_lineas.append(f"EXISTS (SELECT 1 FROM detalle_ventas dv WHERE dv.ID_VENTA = vo.ID_VENTA AND dv.PRODUCTO IN ({placeholders}))")
+                        params_lineas.extend([f"%{p}%" for p in p_prod_list])
+                
+                if p_mes_list:
+                    # Múltiples meses: construir condiciones OR
+                    if len(p_mes_list) == 1:
+                        where_conditions_lineas.append("MONTH(FECHA) = %s AND YEAR(FECHA) = %s")
+                        mes_parts = p_mes_list[0].split('-')
+                        if len(mes_parts) == 2:
+                            params_lineas.extend([mes_parts[1], mes_parts[0]])
+                    else:
+                        # Múltiples meses
+                        mes_conditions = []
+                        for mes_val in p_mes_list:
+                            mes_parts = mes_val.split('-')
+                            if len(mes_parts) == 2:
+                                mes_conditions.append("(MONTH(FECHA) = %s AND YEAR(FECHA) = %s)")
+                                params_lineas.extend([mes_parts[1], mes_parts[0]])
+                        if mes_conditions:
+                            where_conditions_lineas.append(f"({' OR '.join(mes_conditions)})")
+                
+                if p_canal_list:
+                    if len(p_canal_list) == 1:
+                        where_conditions_lineas.append("CANAL_VENTA = %s")
+                        params_lineas.append(p_canal_list[0])
+                    else:
+                        placeholders = ','.join(['%s'] * len(p_canal_list))
+                        where_conditions_lineas.append(f"CANAL_VENTA IN ({placeholders})")
+                        params_lineas.extend(p_canal_list)
+                
+                if p_clasi_list:
+                    if len(p_clasi_list) == 1:
+                        where_conditions_lineas.append("CLASIFICACION = %s")
+                        params_lineas.append(p_clasi_list[0])
+                    else:
+                        placeholders = ','.join(['%s'] * len(p_clasi_list))
+                        where_conditions_lineas.append(f"CLASIFICACION IN ({placeholders})")
+                        params_lineas.extend(p_clasi_list)
                 
                 sql_count_lineas = f"""SELECT LINEA, COUNT(*) as total_registros 
                                       FROM ventas_online vo
@@ -127,23 +183,52 @@ def obtener_metricas_dashboard(request, headers):
                 # Procesar clasificaciones: agregar conteo de registros (COUNT) además del total
                 # Hacer consulta única para obtener todos los conteos agrupados
                 # Construir WHERE con los mismos filtros que el SP (excepto clasificación)
+                # Soporta selección múltiple con IN clauses
                 where_conditions = ["FECHA BETWEEN %s AND %s"]
                 params = [f_inicio, f_fin]
                 
-                if p_prod:
-                    where_conditions.append("EXISTS (SELECT 1 FROM detalle_ventas dv WHERE dv.ID_VENTA = vo.ID_VENTA AND dv.PRODUCTO LIKE %s)")
-                    params.append(f"%{p_prod}%")
-                if p_mes:
-                    where_conditions.append("MONTH(FECHA) = %s AND YEAR(FECHA) = %s")
-                    mes_parts = p_mes.split('-')
-                    if len(mes_parts) == 2:
-                        params.extend([mes_parts[1], mes_parts[0]])
-                if p_canal:
-                    where_conditions.append("CANAL_VENTA = %s")
-                    params.append(p_canal)
-                if p_linea:
-                    where_conditions.append("LINEA = %s")
-                    params.append(p_linea)
+                if p_prod_list:
+                    if len(p_prod_list) == 1:
+                        where_conditions.append("EXISTS (SELECT 1 FROM detalle_ventas dv WHERE dv.ID_VENTA = vo.ID_VENTA AND dv.PRODUCTO LIKE %s)")
+                        params.append(f"%{p_prod_list[0]}%")
+                    else:
+                        placeholders = ','.join(['%s'] * len(p_prod_list))
+                        where_conditions.append(f"EXISTS (SELECT 1 FROM detalle_ventas dv WHERE dv.ID_VENTA = vo.ID_VENTA AND dv.PRODUCTO IN ({placeholders}))")
+                        params.extend([f"%{p}%" for p in p_prod_list])
+                
+                if p_mes_list:
+                    if len(p_mes_list) == 1:
+                        where_conditions.append("MONTH(FECHA) = %s AND YEAR(FECHA) = %s")
+                        mes_parts = p_mes_list[0].split('-')
+                        if len(mes_parts) == 2:
+                            params.extend([mes_parts[1], mes_parts[0]])
+                    else:
+                        mes_conditions = []
+                        for mes_val in p_mes_list:
+                            mes_parts = mes_val.split('-')
+                            if len(mes_parts) == 2:
+                                mes_conditions.append("(MONTH(FECHA) = %s AND YEAR(FECHA) = %s)")
+                                params.extend([mes_parts[1], mes_parts[0]])
+                        if mes_conditions:
+                            where_conditions.append(f"({' OR '.join(mes_conditions)})")
+                
+                if p_canal_list:
+                    if len(p_canal_list) == 1:
+                        where_conditions.append("CANAL_VENTA = %s")
+                        params.append(p_canal_list[0])
+                    else:
+                        placeholders = ','.join(['%s'] * len(p_canal_list))
+                        where_conditions.append(f"CANAL_VENTA IN ({placeholders})")
+                        params.extend(p_canal_list)
+                
+                if p_linea_list:
+                    if len(p_linea_list) == 1:
+                        where_conditions.append("LINEA = %s")
+                        params.append(p_linea_list[0])
+                    else:
+                        placeholders = ','.join(['%s'] * len(p_linea_list))
+                        where_conditions.append(f"LINEA IN ({placeholders})")
+                        params.extend(p_linea_list)
                 
                 sql_count = f"""SELECT CLASIFICACION, COUNT(*) as total_registros 
                                FROM ventas_online vo
