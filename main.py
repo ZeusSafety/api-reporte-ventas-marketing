@@ -433,6 +433,52 @@ def obtener_metricas_dashboard(request, headers):
                 canales = []
                 if cursor.nextset(): canales = fetch_all_safe(cursor)
 
+                # Procesar canales: agregar cantidad_pedidos (COUNT de pedidos) además del monto_total
+                # Construir WHERE con los mismos filtros que el SP
+                where_conditions_canales_electric = ["v.FECHA BETWEEN %s AND %s"]
+                params_canales_electric = [f_inicio, f_fin]
+                
+                if p_prod:
+                    where_conditions_canales_electric.append("EXISTS (SELECT 1 FROM detalle_ventas dv2 WHERE dv2.ID_VENTA = v.ID_VENTA AND dv2.PRODUCTO LIKE %s)")
+                    params_canales_electric.append(f"%{p_prod}%")
+                
+                if p_mes:
+                    where_conditions_canales_electric.append("MONTH(v.FECHA) = %s AND YEAR(v.FECHA) = %s")
+                    mes_parts = p_mes.split('-')
+                    if len(mes_parts) == 2:
+                        params_canales_electric.extend([mes_parts[1], mes_parts[0]])
+                
+                if p_clasi:
+                    where_conditions_canales_electric.append("v.CLASIFICACION = %s")
+                    params_canales_electric.append(p_clasi)
+                
+                if p_linea:
+                    where_conditions_canales_electric.append("v.LINEA = %s")
+                    params_canales_electric.append(p_linea)
+                
+                # Calcular cantidad_pedidos (COUNT de pedidos) por canal
+                sql_canales_count_electric = f"""SELECT 
+                                          v.CANAL_VENTA,
+                                          COUNT(DISTINCT v.ID_VENTA) as cantidad_pedidos
+                                        FROM ventas_online v
+                                        WHERE {' AND '.join(where_conditions_canales_electric)}
+                                        GROUP BY v.CANAL_VENTA"""
+                cursor.execute(sql_canales_count_electric, params_canales_electric)
+                counts_map_canales_electric = {}
+                for row in cursor.fetchall():
+                    canal_key = row.get('CANAL_VENTA') or row.get('canal_venta')
+                    if canal_key:
+                        counts_map_canales_electric[canal_key] = row.get('cantidad_pedidos', 0)
+
+                # Agregar cantidad_pedidos a cada canal
+                canales_procesados_electric = []
+                for canal in canales:
+                    canal_name = canal.get('canal_venta') or canal.get('CANAL_VENTA') or canal.get('canal') or canal.get('CANAL') or canal.get('nombre') or canal.get('NOMBRE')
+                    if canal_name and canal_name in counts_map_canales_electric:
+                        canal['cantidad_pedidos'] = counts_map_canales_electric[canal_name]
+                        canal['CANTIDAD_PEDIDOS'] = counts_map_canales_electric[canal_name]
+                    canales_procesados_electric.append(canal)
+
                 # 5. Ventas por Región
                 regiones = []
                 if cursor.nextset(): regiones = fetch_all_safe(cursor)
@@ -449,7 +495,7 @@ def obtener_metricas_dashboard(request, headers):
                     "kpis": kpi_data,
                     "clientes": clientes,
                     "productos_vendidos": productos,
-                    "canal_ventas": canales,
+                    "canal_ventas": canales_procesados_electric,  # Usar los procesados con cantidad_pedidos
                     "ventas_region": regiones,
                     "tipos_pago": pagos,
                     "ventas_por_mes": ventas_mes
