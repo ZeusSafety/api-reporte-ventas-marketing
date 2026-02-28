@@ -78,18 +78,121 @@ def obtener_metricas_dashboard(request, headers):
                 p_linea = p_linea_list[0] if p_linea_list else None
 
                 # 2. Ejecución del SP (usa primer valor para compatibilidad)
-                cursor.callproc('sp_Dashboard_General1', (
-                    n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), f_inicio, f_fin
-                ))
-
-                # 3. KPIs
-                resumen = fetch_all_safe(cursor)
-                kpi_data = {"total_generado": 0, "cantidad_ventas": 0}
-                if resumen and resumen[0].get('total_generado') is not None:
-                    kpi_data = resumen[0]
-
-                # 4. Otros datasets (Ventas mes, Canales, etc.)
-                ventas_mes = fetch_all_safe(cursor) if cursor.nextset() else []
+                # Si hay múltiples productos, necesitamos recalcular KPIs y ventas por mes con filtros múltiples
+                usar_sp_directo = len(p_prod_list) <= 1 and len(p_mes_list) <= 1 and len(p_canal_list) <= 1 and len(p_clasi_list) <= 1 and len(p_linea_list) <= 1
+                
+                if usar_sp_directo:
+                    cursor.callproc('sp_Dashboard_General1', (
+                        n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), f_inicio, f_fin
+                    ))
+                    # 3. KPIs
+                    resumen = fetch_all_safe(cursor)
+                    kpi_data = {"total_generado": 0, "cantidad_ventas": 0}
+                    if resumen and resumen[0].get('total_generado') is not None:
+                        kpi_data = resumen[0]
+                    # 4. Otros datasets (Ventas mes, Canales, etc.)
+                    ventas_mes = fetch_all_safe(cursor) if cursor.nextset() else []
+                else:
+                    # Múltiples filtros: ejecutar consultas SQL directas para KPIs y ventas por mes
+                    # Construir WHERE con filtros múltiples
+                    where_kpi = ["vo.FECHA BETWEEN %s AND %s"]
+                    params_kpi = [f_inicio, f_fin]
+                    
+                    if p_prod_list:
+                        if len(p_prod_list) == 1:
+                            where_kpi.append("EXISTS (SELECT 1 FROM detalle_ventas dv WHERE dv.ID_VENTA = vo.ID_VENTA AND dv.PRODUCTO LIKE %s)")
+                            params_kpi.append(f"%{p_prod_list[0]}%")
+                        else:
+                            placeholders = ','.join(['%s'] * len(p_prod_list))
+                            where_kpi.append(f"EXISTS (SELECT 1 FROM detalle_ventas dv WHERE dv.ID_VENTA = vo.ID_VENTA AND dv.PRODUCTO IN ({placeholders}))")
+                            params_kpi.extend([f"%{p}%" for p in p_prod_list])
+                    
+                    if p_mes_list:
+                        if len(p_mes_list) == 1:
+                            where_kpi.append("MONTH(vo.FECHA) = %s AND YEAR(vo.FECHA) = %s")
+                            mes_parts = p_mes_list[0].split('-')
+                            if len(mes_parts) == 2:
+                                params_kpi.extend([mes_parts[1], mes_parts[0]])
+                        else:
+                            mes_conditions = []
+                            for mes_val in p_mes_list:
+                                mes_parts = mes_val.split('-')
+                                if len(mes_parts) == 2:
+                                    mes_conditions.append("(MONTH(vo.FECHA) = %s AND YEAR(vo.FECHA) = %s)")
+                                    params_kpi.extend([mes_parts[1], mes_parts[0]])
+                            if mes_conditions:
+                                where_kpi.append(f"({' OR '.join(mes_conditions)})")
+                    
+                    if p_canal_list:
+                        if len(p_canal_list) == 1:
+                            where_kpi.append("vo.CANAL_VENTA = %s")
+                            params_kpi.append(p_canal_list[0])
+                        else:
+                            placeholders = ','.join(['%s'] * len(p_canal_list))
+                            where_kpi.append(f"vo.CANAL_VENTA IN ({placeholders})")
+                            params_kpi.extend(p_canal_list)
+                    
+                    if p_clasi_list:
+                        if len(p_clasi_list) == 1:
+                            where_kpi.append("vo.CLASIFICACION = %s")
+                            params_kpi.append(p_clasi_list[0])
+                        else:
+                            placeholders = ','.join(['%s'] * len(p_clasi_list))
+                            where_kpi.append(f"vo.CLASIFICACION IN ({placeholders})")
+                            params_kpi.extend(p_clasi_list)
+                    
+                    if p_linea_list:
+                        if len(p_linea_list) == 1:
+                            where_kpi.append("vo.LINEA = %s")
+                            params_kpi.append(p_linea_list[0])
+                        else:
+                            placeholders = ','.join(['%s'] * len(p_linea_list))
+                            where_kpi.append(f"vo.LINEA IN ({placeholders})")
+                            params_kpi.extend(p_linea_list)
+                    
+                    # Calcular KPIs con filtros múltiples
+                    sql_kpi = f"""SELECT 
+                                    COALESCE(SUM(vo.TOTAL), 0) as total_generado,
+                                    COUNT(DISTINCT vo.ID_VENTA) as cantidad_ventas
+                                  FROM ventas_online vo
+                                  WHERE {' AND '.join(where_kpi)}"""
+                    cursor.execute(sql_kpi, params_kpi)
+                    kpi_row = cursor.fetchone()
+                    kpi_data = {
+                        "total_generado": float(kpi_row.get('total_generado', 0)) if kpi_row else 0,
+                        "cantidad_ventas": int(kpi_row.get('cantidad_ventas', 0)) if kpi_row else 0
+                    }
+                    
+                    # Calcular ventas por mes con filtros múltiples
+                    sql_ventas_mes = f"""SELECT 
+                                           CONCAT(YEAR(vo.FECHA), '-', LPAD(MONTH(vo.FECHA), 2, '0')) as mes,
+                                           YEAR(vo.FECHA) as anio,
+                                           MONTH(vo.FECHA) as mes_num,
+                                           COALESCE(SUM(vo.TOTAL), 0) as total
+                                         FROM ventas_online vo
+                                         WHERE {' AND '.join(where_kpi)}
+                                         GROUP BY YEAR(vo.FECHA), MONTH(vo.FECHA)
+                                         ORDER BY YEAR(vo.FECHA), MONTH(vo.FECHA)"""
+                    cursor.execute(sql_ventas_mes, params_kpi)
+                    ventas_mes_raw = cursor.fetchall()
+                    ventas_mes = []
+                    meses_nombres = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+                    for row in ventas_mes_raw:
+                        mes_num = row.get('mes_num', 0)
+                        mes_nombre = meses_nombres[mes_num - 1] if 1 <= mes_num <= 12 else f"Mes {mes_num}"
+                        ventas_mes.append({
+                            "mes": row.get('mes'),
+                            "mesLabel": f"{mes_nombre} {row.get('anio')}",
+                            "total": float(row.get('total', 0))
+                        })
+                    
+                    # Ejecutar SP solo para obtener productos_top, canales, clasificaciones y lineas (sin filtros múltiples en estos)
+                    cursor.callproc('sp_Dashboard_General1', (
+                        n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), f_inicio, f_fin
+                    ))
+                    # Saltar KPIs y ventas_mes del SP (ya los calculamos)
+                    _ = fetch_all_safe(cursor)  # KPIs (ignorar)
+                    _ = fetch_all_safe(cursor) if cursor.nextset() else []  # ventas_mes (ignorar)
                 
                 # --- CORRECCIÓN CLAVE PARA PRODUCTOS TOP ---
                 prod_raw = fetch_all_safe(cursor) if cursor.nextset() else []
