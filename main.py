@@ -196,6 +196,71 @@ def obtener_metricas_dashboard(request, headers):
                 
                 # --- CORRECCIÓN CLAVE PARA PRODUCTOS TOP ---
                 prod_raw = fetch_all_safe(cursor) if cursor.nextset() else []
+                
+                # Si hay múltiples filtros, recalcular productos_top con consulta SQL directa
+                if not usar_sp_directo:
+                    # Construir WHERE para productos_top con TODOS los filtros (excepto producto)
+                    where_prod_top = ["vo.FECHA BETWEEN %s AND %s"]
+                    params_prod_top = [f_inicio, f_fin]
+                    
+                    if p_mes_list:
+                        if len(p_mes_list) == 1:
+                            where_prod_top.append("MONTH(vo.FECHA) = %s AND YEAR(vo.FECHA) = %s")
+                            mes_parts = p_mes_list[0].split('-')
+                            if len(mes_parts) == 2:
+                                params_prod_top.extend([mes_parts[1], mes_parts[0]])
+                        else:
+                            mes_conditions = []
+                            for mes_val in p_mes_list:
+                                mes_parts = mes_val.split('-')
+                                if len(mes_parts) == 2:
+                                    mes_conditions.append("(MONTH(vo.FECHA) = %s AND YEAR(vo.FECHA) = %s)")
+                                    params_prod_top.extend([mes_parts[1], mes_parts[0]])
+                            if mes_conditions:
+                                where_prod_top.append(f"({' OR '.join(mes_conditions)})")
+                    
+                    if p_canal_list:
+                        if len(p_canal_list) == 1:
+                            where_prod_top.append("vo.CANAL_VENTA = %s")
+                            params_prod_top.append(p_canal_list[0])
+                        else:
+                            placeholders = ','.join(['%s'] * len(p_canal_list))
+                            where_prod_top.append(f"vo.CANAL_VENTA IN ({placeholders})")
+                            params_prod_top.extend(p_canal_list)
+                    
+                    if p_clasi_list:
+                        if len(p_clasi_list) == 1:
+                            where_prod_top.append("vo.CLASIFICACION = %s")
+                            params_prod_top.append(p_clasi_list[0])
+                        else:
+                            placeholders = ','.join(['%s'] * len(p_clasi_list))
+                            where_prod_top.append(f"vo.CLASIFICACION IN ({placeholders})")
+                            params_prod_top.extend(p_clasi_list)
+                    
+                    if p_linea_list:
+                        if len(p_linea_list) == 1:
+                            where_prod_top.append("vo.LINEA = %s")
+                            params_prod_top.append(p_linea_list[0])
+                        else:
+                            placeholders = ','.join(['%s'] * len(p_linea_list))
+                            where_prod_top.append(f"vo.LINEA IN ({placeholders})")
+                            params_prod_top.extend(p_linea_list)
+                    
+                    # Consulta SQL para productos_top con TODOS los filtros
+                    sql_prod_top = f"""SELECT 
+                                        dv.PRODUCTO,
+                                        SUM(dv.CANTIDAD) as unidades_test,
+                                        SUM(dv.DOCENA) as DOCENAS,
+                                        SUM(dv.PAR) as PARES
+                                      FROM ventas_online vo
+                                      INNER JOIN detalle_ventas dv ON dv.ID_VENTA = vo.ID_VENTA
+                                      WHERE {' AND '.join(where_prod_top)}
+                                      GROUP BY dv.PRODUCTO
+                                      ORDER BY unidades_test DESC
+                                      LIMIT 20"""
+                    cursor.execute(sql_prod_top, params_prod_top)
+                    prod_raw = cursor.fetchall()
+                
                 prod_top = []
                 for p in prod_raw:
                     prod_top.append({
@@ -206,7 +271,75 @@ def obtener_metricas_dashboard(request, headers):
                         "PARES": p.get("PARES") or 0
                     })
 
-                canales = fetch_all_safe(cursor) if cursor.nextset() else []
+                canales_raw = fetch_all_safe(cursor) if cursor.nextset() else []
+                
+                # Si hay múltiples filtros, recalcular canales con consulta SQL directa
+                if not usar_sp_directo:
+                    # Construir WHERE para canales con TODOS los filtros (excepto canal)
+                    where_canales = ["vo.FECHA BETWEEN %s AND %s"]
+                    params_canales = [f_inicio, f_fin]
+                    
+                    if p_prod_list:
+                        if len(p_prod_list) == 1:
+                            where_canales.append("EXISTS (SELECT 1 FROM detalle_ventas dv WHERE dv.ID_VENTA = vo.ID_VENTA AND dv.PRODUCTO LIKE %s)")
+                            params_canales.append(f"%{p_prod_list[0]}%")
+                        else:
+                            placeholders = ','.join(['%s'] * len(p_prod_list))
+                            where_canales.append(f"EXISTS (SELECT 1 FROM detalle_ventas dv WHERE dv.ID_VENTA = vo.ID_VENTA AND dv.PRODUCTO IN ({placeholders}))")
+                            params_canales.extend([f"%{p}%" for p in p_prod_list])
+                    
+                    if p_mes_list:
+                        if len(p_mes_list) == 1:
+                            where_canales.append("MONTH(vo.FECHA) = %s AND YEAR(vo.FECHA) = %s")
+                            mes_parts = p_mes_list[0].split('-')
+                            if len(mes_parts) == 2:
+                                params_canales.extend([mes_parts[1], mes_parts[0]])
+                        else:
+                            mes_conditions = []
+                            for mes_val in p_mes_list:
+                                mes_parts = mes_val.split('-')
+                                if len(mes_parts) == 2:
+                                    mes_conditions.append("(MONTH(vo.FECHA) = %s AND YEAR(vo.FECHA) = %s)")
+                                    params_canales.extend([mes_parts[1], mes_parts[0]])
+                            if mes_conditions:
+                                where_canales.append(f"({' OR '.join(mes_conditions)})")
+                    
+                    if p_clasi_list:
+                        if len(p_clasi_list) == 1:
+                            where_canales.append("vo.CLASIFICACION = %s")
+                            params_canales.append(p_clasi_list[0])
+                        else:
+                            placeholders = ','.join(['%s'] * len(p_clasi_list))
+                            where_canales.append(f"vo.CLASIFICACION IN ({placeholders})")
+                            params_canales.extend(p_clasi_list)
+                    
+                    if p_linea_list:
+                        if len(p_linea_list) == 1:
+                            where_canales.append("vo.LINEA = %s")
+                            params_canales.append(p_linea_list[0])
+                        else:
+                            placeholders = ','.join(['%s'] * len(p_linea_list))
+                            where_canales.append(f"vo.LINEA IN ({placeholders})")
+                            params_canales.extend(p_linea_list)
+                    
+                    # Consulta SQL para canales con TODOS los filtros
+                    sql_canales = f"""SELECT 
+                                        vo.CANAL_VENTA as canal_venta,
+                                        SUM(vo.TOTAL) as total
+                                      FROM ventas_online vo
+                                      WHERE {' AND '.join(where_canales)}
+                                      GROUP BY vo.CANAL_VENTA
+                                      ORDER BY total DESC"""
+                    cursor.execute(sql_canales, params_canales)
+                    canales_raw = cursor.fetchall()
+                
+                canales = []
+                for c in canales_raw:
+                    canales.append({
+                        "canal_venta": c.get("canal_venta") or c.get("CANAL_VENTA") or c.get("canal") or c.get("CANAL") or "—",
+                        "total": float(c.get("total") or c.get("TOTAL") or 0)
+                    })
+                
                 clasificaciones = fetch_all_safe(cursor) if cursor.nextset() else []
                 lineas = fetch_all_safe(cursor) if cursor.nextset() else []
 
@@ -274,6 +407,31 @@ def obtener_metricas_dashboard(request, headers):
                     if linea_key:
                         counts_map_lineas[linea_key] = row.get('total_registros', 0)
 
+                # Si hay múltiples filtros, recalcular también los valores de total (monto) para líneas
+                if not usar_sp_directo:
+                    sql_lineas_total = f"""SELECT 
+                                             vo.LINEA,
+                                             SUM(vo.TOTAL) as total_monto
+                                           FROM ventas_online vo
+                                           WHERE {' AND '.join(where_conditions_lineas)}
+                                           GROUP BY vo.LINEA"""
+                    cursor.execute(sql_lineas_total, params_lineas)
+                    monto_map_lineas = {}
+                    for row in cursor.fetchall():
+                        linea_key = row.get('LINEA') or row.get('linea')
+                        if linea_key:
+                            monto_map_lineas[linea_key] = float(row.get('total_monto', 0))
+                    
+                    # Actualizar líneas con valores recalculados
+                    lineas_actualizadas = []
+                    for linea in lineas:
+                        linea_name = linea.get('LINEA') or linea.get('linea') or linea.get('nombre') or linea.get('NOMBRE') or linea.get('descripcion') or linea.get('DESCRIPCION')
+                        if linea_name and linea_name in monto_map_lineas:
+                            linea['total'] = monto_map_lineas[linea_name]
+                            linea['TOTAL'] = monto_map_lineas[linea_name]
+                        lineas_actualizadas.append(linea)
+                    lineas = lineas_actualizadas
+                
                 # Agregar total_registros a cada línea
                 lineas_procesadas = []
                 for linea in lineas:
@@ -344,6 +502,31 @@ def obtener_metricas_dashboard(request, headers):
                     if clasi_key:
                         counts_map[clasi_key] = row.get('total_registros', 0)
 
+                # Si hay múltiples filtros, recalcular también los valores de total (monto) para clasificaciones
+                if not usar_sp_directo:
+                    sql_clasi_total = f"""SELECT 
+                                            vo.CLASIFICACION,
+                                            SUM(vo.TOTAL) as total_monto
+                                          FROM ventas_online vo
+                                          WHERE {' AND '.join(where_conditions)}
+                                          GROUP BY vo.CLASIFICACION"""
+                    cursor.execute(sql_clasi_total, params)
+                    monto_map = {}
+                    for row in cursor.fetchall():
+                        clasi_key = row.get('CLASIFICACION') or row.get('clasificacion')
+                        if clasi_key:
+                            monto_map[clasi_key] = float(row.get('total_monto', 0))
+                    
+                    # Actualizar clasificaciones con valores recalculados
+                    clasificaciones_actualizadas = []
+                    for clasi in clasificaciones:
+                        clasi_name = clasi.get('clasificacion_pedido') or clasi.get('CLASIFICACION_PEDIDO') or clasi.get('clasificacion') or clasi.get('CLASIFICACION') or clasi.get('nombre') or clasi.get('NOMBRE')
+                        if clasi_name and clasi_name in monto_map:
+                            clasi['total'] = monto_map[clasi_name]
+                            clasi['TOTAL'] = monto_map[clasi_name]
+                        clasificaciones_actualizadas.append(clasi)
+                    clasificaciones = clasificaciones_actualizadas
+                
                 # Agregar total_registros a cada clasificación
                 clasificaciones_procesadas = []
                 for clasi in clasificaciones:
