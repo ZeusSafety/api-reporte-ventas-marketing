@@ -175,7 +175,7 @@ def obtener_metricas_dashboard(request, headers):
                                          FROM ventas_online vo
                                          INNER JOIN detalle_ventas dv ON dv.ID_VENTA = vo.ID_VENTA
                                          WHERE {' AND '.join(where_kpi)}
-                                         GROUP BY YEAR(vo.FECHA), MONTH(vo.FECHA)
+                                         GROUP BY YEAR(vo.FECHA), MONTH(vo.FECHA), CONCAT(YEAR(vo.FECHA), '-', LPAD(MONTH(vo.FECHA), 2, '0'))
                                          ORDER BY YEAR(vo.FECHA), MONTH(vo.FECHA)"""
                     cursor.execute(sql_ventas_mes, params_kpi)
                     ventas_mes_raw = cursor.fetchall()
