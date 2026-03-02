@@ -365,13 +365,20 @@ def obtener_metricas_dashboard(request, headers):
             elif tipo == "full_reporte_2":
                 c = request.args.get("cliente")
                 r = request.args.get("region")
+                d = request.args.get("distrito")
                 p = request.args.get("pago")
                 comp = request.args.get("comprobante")
                 alm = request.args.get("almacen")
 
-                cursor.callproc('sp_Dashboard_ReporteGeneral2_Filtrado', (
-                    n(c), n(r), n(p), n(comp), n(alm), f_inicio, f_fin
-                ))
+                # Intentar versión nueva del SP con distrito (si existe); si no, fallback al SP antiguo.
+                try:
+                    cursor.callproc('sp_Dashboard_ReporteGeneral2_Filtrado', (
+                        n(c), n(r), n(d), n(p), n(comp), n(alm), f_inicio, f_fin
+                    ))
+                except Exception:
+                    cursor.callproc('sp_Dashboard_ReporteGeneral2_Filtrado', (
+                        n(c), n(r), n(p), n(comp), n(alm), f_inicio, f_fin
+                    ))
 
                 ranking = fetch_all_safe(cursor)
                 
