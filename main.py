@@ -78,8 +78,10 @@ def obtener_metricas_dashboard(request, headers):
                 p_linea = p_linea_list[0] if p_linea_list else None
 
                 # 2. Ejecución del SP (usa primer valor para compatibilidad)
-                # Si hay múltiples productos, necesitamos recalcular KPIs y ventas por mes con filtros múltiples
-                usar_sp_directo = len(p_prod_list) <= 1 and len(p_mes_list) <= 1 and len(p_canal_list) <= 1 and len(p_clasi_list) <= 1 and len(p_linea_list) <= 1
+                # Si hay cualquier filtro activo, usar consultas SQL directas para asegurar que todos los datos se filtren correctamente
+                # Solo usar SP directamente cuando NO hay ningún filtro activo
+                tiene_filtros = len(p_prod_list) > 0 or len(p_mes_list) > 0 or len(p_canal_list) > 0 or len(p_clasi_list) > 0 or len(p_linea_list) > 0
+                usar_sp_directo = not tiene_filtros
                 
                 if usar_sp_directo:
                     cursor.callproc('sp_Dashboard_General1', (
@@ -433,6 +435,7 @@ def obtener_metricas_dashboard(request, headers):
                     lineas = lineas_actualizadas
                 
                 # Agregar total_registros a cada línea y filtrar las que tienen 0 cuando hay filtros activos
+                # IMPORTANTE: Para líneas, siempre usar total_registros (cantidad de pedidos) como valor principal, no total (monto)
                 lineas_procesadas = []
                 for linea in lineas:
                     linea_name = linea.get('LINEA') or linea.get('linea') or linea.get('nombre') or linea.get('NOMBRE') or linea.get('descripcion') or linea.get('DESCRIPCION')
@@ -440,6 +443,12 @@ def obtener_metricas_dashboard(request, headers):
                     total_registros = counts_map_lineas.get(linea_name, 0) if linea_name else 0
                     linea['total_registros'] = total_registros
                     linea['TOTAL_REGISTROS'] = total_registros
+                    # Sobrescribir 'total' y 'TOTAL' con total_registros para que el frontend siempre use cantidad de pedidos
+                    linea['total'] = total_registros
+                    linea['TOTAL'] = total_registros
+                    # También sobrescribir 'cantidad' y 'CANTIDAD' para consistencia
+                    linea['cantidad'] = total_registros
+                    linea['CANTIDAD'] = total_registros
                     
                     # Si hay filtros activos, solo incluir líneas con total_registros > 0
                     if not usar_sp_directo:
@@ -535,6 +544,7 @@ def obtener_metricas_dashboard(request, headers):
                     clasificaciones = clasificaciones_actualizadas
                 
                 # Agregar total_registros a cada clasificación y filtrar las que tienen 0 cuando hay filtros activos
+                # IMPORTANTE: Para clasificaciones, siempre usar total_registros (cantidad de pedidos) como valor principal, no total (monto)
                 clasificaciones_procesadas = []
                 for clasi in clasificaciones:
                     clasi_name = clasi.get('clasificacion_pedido') or clasi.get('CLASIFICACION_PEDIDO') or clasi.get('clasificacion') or clasi.get('CLASIFICACION') or clasi.get('nombre') or clasi.get('NOMBRE')
@@ -542,6 +552,12 @@ def obtener_metricas_dashboard(request, headers):
                     total_registros = counts_map.get(clasi_name, 0) if clasi_name else 0
                     clasi['total_registros'] = total_registros
                     clasi['TOTAL_REGISTROS'] = total_registros
+                    # Sobrescribir 'total' y 'TOTAL' con total_registros para que el frontend siempre use cantidad de pedidos
+                    clasi['total'] = total_registros
+                    clasi['TOTAL'] = total_registros
+                    # También sobrescribir 'cantidad' y 'CANTIDAD' para consistencia
+                    clasi['cantidad'] = total_registros
+                    clasi['CANTIDAD'] = total_registros
                     
                     # Si hay filtros activos, solo incluir clasificaciones con total_registros > 0
                     if not usar_sp_directo:
