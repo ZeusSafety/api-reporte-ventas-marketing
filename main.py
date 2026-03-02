@@ -154,9 +154,10 @@ def obtener_metricas_dashboard(request, headers):
                     
                     # Calcular KPIs con filtros múltiples
                     sql_kpi = f"""SELECT 
-                                    COALESCE(SUM(vo.TOTAL), 0) as total_generado,
+                                    COALESCE(SUM(dv.TOTAL), 0) as total_generado,
                                     COUNT(DISTINCT vo.ID_VENTA) as cantidad_ventas
                                   FROM ventas_online vo
+                                  INNER JOIN detalle_ventas dv ON dv.ID_VENTA = vo.ID_VENTA
                                   WHERE {' AND '.join(where_kpi)}"""
                     cursor.execute(sql_kpi, params_kpi)
                     kpi_row = cursor.fetchone()
@@ -170,8 +171,9 @@ def obtener_metricas_dashboard(request, headers):
                                            CONCAT(YEAR(vo.FECHA), '-', LPAD(MONTH(vo.FECHA), 2, '0')) as mes,
                                            YEAR(vo.FECHA) as anio,
                                            MONTH(vo.FECHA) as mes_num,
-                                           COALESCE(SUM(vo.TOTAL), 0) as total
+                                           COALESCE(SUM(dv.TOTAL), 0) as total
                                          FROM ventas_online vo
+                                         INNER JOIN detalle_ventas dv ON dv.ID_VENTA = vo.ID_VENTA
                                          WHERE {' AND '.join(where_kpi)}
                                          GROUP BY YEAR(vo.FECHA), MONTH(vo.FECHA)
                                          ORDER BY YEAR(vo.FECHA), MONTH(vo.FECHA)"""
@@ -327,8 +329,9 @@ def obtener_metricas_dashboard(request, headers):
                     # Consulta SQL para canales con TODOS los filtros
                     sql_canales = f"""SELECT 
                                         vo.CANAL_VENTA as canal_venta,
-                                        SUM(vo.TOTAL) as total
+                                        SUM(dv.TOTAL) as total
                                       FROM ventas_online vo
+                                      INNER JOIN detalle_ventas dv ON dv.ID_VENTA = vo.ID_VENTA
                                       WHERE {' AND '.join(where_canales)}
                                       GROUP BY vo.CANAL_VENTA
                                       ORDER BY total DESC"""
@@ -413,8 +416,9 @@ def obtener_metricas_dashboard(request, headers):
                 if not usar_sp_directo:
                     sql_lineas_total = f"""SELECT 
                                              vo.LINEA,
-                                             SUM(vo.TOTAL) as total_monto
+                                             SUM(dv.TOTAL) as total_monto
                                            FROM ventas_online vo
+                                           INNER JOIN detalle_ventas dv ON dv.ID_VENTA = vo.ID_VENTA
                                            WHERE {' AND '.join(where_conditions_lineas)}
                                            GROUP BY vo.LINEA"""
                     cursor.execute(sql_lineas_total, params_lineas)
@@ -522,8 +526,9 @@ def obtener_metricas_dashboard(request, headers):
                 if not usar_sp_directo:
                     sql_clasi_total = f"""SELECT 
                                             vo.CLASIFICACION,
-                                            SUM(vo.TOTAL) as total_monto
+                                            SUM(dv.TOTAL) as total_monto
                                           FROM ventas_online vo
+                                          INNER JOIN detalle_ventas dv ON dv.ID_VENTA = vo.ID_VENTA
                                           WHERE {' AND '.join(where_conditions)}
                                           GROUP BY vo.CLASIFICACION"""
                     cursor.execute(sql_clasi_total, params)
