@@ -516,11 +516,21 @@ def obtener_metricas_dashboard(request, headers):
                 p_canal = request.args.get("canal")
                 p_clasi = request.args.get("clasificacion")
                 p_linea = request.args.get("linea")
+                p_cliente = request.args.get("cliente")
+                p_pago = request.args.get("pago")
+                p_region = request.args.get("region")
 
-                # Llamada al nuevo Stored Procedure corregido
-                cursor.callproc('sp_Dashboard_ZeusSafety', (
-                    n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), f_inicio, f_fin
-                ))
+                # Llamada al nuevo Stored Procedure con todos los filtros
+                # Intentar versión nueva del SP con cliente, pago, region (9 params); si no, fallback al SP antiguo (7 params)
+                try:
+                    cursor.callproc('sp_Dashboard_ZeusSafety', (
+                        n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), n(p_cliente), n(p_pago), n(p_region), f_inicio, f_fin
+                    ))
+                except Exception:
+                    # Fallback al SP antiguo (sin cliente, pago, region)
+                    cursor.callproc('sp_Dashboard_ZeusSafety', (
+                        n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), f_inicio, f_fin
+                    ))
 
                 # 1. KPIs (Total y Cantidad)
                 resumen = fetch_all_safe(cursor)
@@ -537,7 +547,7 @@ def obtener_metricas_dashboard(request, headers):
                 ventas_mes = fetch_all_safe(cursor) if cursor.nextset() else []
 
                 # Procesar canales: agregar numero_de_pedidos (COUNT de pedidos) además del monto_total
-                # Construir WHERE con los mismos filtros que el SP
+                # Construir WHERE con TODOS los filtros (incluyendo cliente, pago, region)
                 where_conditions_canales = ["v.FECHA BETWEEN %s AND %s"]
                 params_canales = [f_inicio, f_fin]
                 
@@ -558,6 +568,18 @@ def obtener_metricas_dashboard(request, headers):
                 if p_linea:
                     where_conditions_canales.append("v.LINEA = %s")
                     params_canales.append(p_linea)
+                
+                if p_cliente:
+                    where_conditions_canales.append("v.CLIENTE = %s")
+                    params_canales.append(p_cliente)
+                
+                if p_pago:
+                    where_conditions_canales.append("v.FORMA_DE_PAGO = %s")
+                    params_canales.append(p_pago)
+                
+                if p_region:
+                    where_conditions_canales.append("v.REGION = %s")
+                    params_canales.append(p_region)
                 
                 # Nota: No filtramos por p_canal aquí porque queremos el COUNT de todos los canales
                 # El filtro de canal se aplica en el stored procedure para otros datos
