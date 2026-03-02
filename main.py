@@ -251,15 +251,17 @@ def obtener_metricas_dashboard(request, headers):
                             params_prod_top.extend(p_linea_list)
                     
                     # Consulta SQL para productos_top con TODOS los filtros
+                    # Usar CASE WHEN con UNIDAD_MEDIDA para calcular unidades, docenas y pares (igual que en los SPs)
                     sql_prod_top = f"""SELECT 
                                         dv.PRODUCTO,
-                                        SUM(dv.CANTIDAD) as unidades_test,
-                                        SUM(dv.DOCENA) as DOCENAS,
-                                        SUM(dv.PAR) as PARES
+                                        SUM(CASE WHEN UPPER(IFNULL(dv.UNIDAD_MEDIDA, '')) LIKE '%UNIDAD%' THEN dv.CANTIDAD ELSE 0 END) as unidades_test,
+                                        SUM(CASE WHEN UPPER(IFNULL(dv.UNIDAD_MEDIDA, '')) LIKE '%DOCENA%' THEN dv.CANTIDAD ELSE 0 END) as DOCENAS,
+                                        SUM(CASE WHEN UPPER(IFNULL(dv.UNIDAD_MEDIDA, '')) LIKE '%PAR%' THEN dv.CANTIDAD ELSE 0 END) as PARES
                                       FROM ventas_online vo
                                       INNER JOIN detalle_ventas dv ON dv.ID_VENTA = vo.ID_VENTA
                                       WHERE {' AND '.join(where_prod_top)}
                                       GROUP BY dv.PRODUCTO
+                                      HAVING unidades_test > 0 OR DOCENAS > 0 OR PARES > 0
                                       ORDER BY unidades_test DESC
                                       LIMIT 20"""
                     cursor.execute(sql_prod_top, params_prod_top)
