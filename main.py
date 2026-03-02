@@ -464,7 +464,11 @@ def obtener_metricas_dashboard(request, headers):
 
                 # Procesar canales: agregar cantidad_pedidos (COUNT de pedidos) además del monto_total
                 # Construir WHERE con TODOS los filtros (incluyendo cliente, pago, region)
-                where_conditions_canales_electric = ["v.FECHA BETWEEN %s AND %s"]
+                # FILTRO AUTOMÁTICO: Solo productos de Zeus Electric (LINEA = 'ZEUS-ELECTRIC' o 'ZEUS ELECTRIC')
+                where_conditions_canales_electric = [
+                    "v.FECHA BETWEEN %s AND %s",
+                    "(v.LINEA = 'ZEUS-ELECTRIC' OR v.LINEA = 'ZEUS ELECTRIC')"
+                ]
                 params_canales_electric = [f_inicio, f_fin]
                 
                 if p_prod:
@@ -572,7 +576,11 @@ def obtener_metricas_dashboard(request, headers):
 
                 # Procesar canales: agregar numero_de_pedidos (COUNT de pedidos) además del monto_total
                 # Construir WHERE con TODOS los filtros (incluyendo cliente, pago, region)
-                where_conditions_canales = ["v.FECHA BETWEEN %s AND %s"]
+                # FILTRO AUTOMÁTICO: Solo productos de Zeus Safety (LINEA = 'ZEUS-SAFETY' o 'ZEUS SAFETY')
+                where_conditions_canales = [
+                    "v.FECHA BETWEEN %s AND %s",
+                    "(v.LINEA = 'ZEUS-SAFETY' OR v.LINEA = 'ZEUS SAFETY')"
+                ]
                 params_canales = [f_inicio, f_fin]
                 
                 if p_prod:
