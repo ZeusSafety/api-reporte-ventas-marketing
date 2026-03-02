@@ -432,14 +432,21 @@ def obtener_metricas_dashboard(request, headers):
                         lineas_actualizadas.append(linea)
                     lineas = lineas_actualizadas
                 
-                # Agregar total_registros a cada línea
+                # Agregar total_registros a cada línea y filtrar las que tienen 0 cuando hay filtros activos
                 lineas_procesadas = []
                 for linea in lineas:
                     linea_name = linea.get('LINEA') or linea.get('linea') or linea.get('nombre') or linea.get('NOMBRE') or linea.get('descripcion') or linea.get('DESCRIPCION')
                     # Siempre agregar total_registros, usar 0 si no está en el mapa (no hay registros para este filtro)
-                    linea['total_registros'] = counts_map_lineas.get(linea_name, 0) if linea_name else 0
-                    linea['TOTAL_REGISTROS'] = counts_map_lineas.get(linea_name, 0) if linea_name else 0
-                    lineas_procesadas.append(linea)
+                    total_registros = counts_map_lineas.get(linea_name, 0) if linea_name else 0
+                    linea['total_registros'] = total_registros
+                    linea['TOTAL_REGISTROS'] = total_registros
+                    
+                    # Si hay filtros activos, solo incluir líneas con total_registros > 0
+                    if not usar_sp_directo:
+                        if total_registros > 0:
+                            lineas_procesadas.append(linea)
+                    else:
+                        lineas_procesadas.append(linea)
 
                 # Procesar clasificaciones: agregar conteo de registros (COUNT) además del total
                 # Hacer consulta única para obtener todos los conteos agrupados
@@ -527,14 +534,21 @@ def obtener_metricas_dashboard(request, headers):
                         clasificaciones_actualizadas.append(clasi)
                     clasificaciones = clasificaciones_actualizadas
                 
-                # Agregar total_registros a cada clasificación
+                # Agregar total_registros a cada clasificación y filtrar las que tienen 0 cuando hay filtros activos
                 clasificaciones_procesadas = []
                 for clasi in clasificaciones:
                     clasi_name = clasi.get('clasificacion_pedido') or clasi.get('CLASIFICACION_PEDIDO') or clasi.get('clasificacion') or clasi.get('CLASIFICACION') or clasi.get('nombre') or clasi.get('NOMBRE')
                     # Siempre agregar total_registros, usar 0 si no está en el mapa (no hay registros para este filtro)
-                    clasi['total_registros'] = counts_map.get(clasi_name, 0) if clasi_name else 0
-                    clasi['TOTAL_REGISTROS'] = counts_map.get(clasi_name, 0) if clasi_name else 0
-                    clasificaciones_procesadas.append(clasi)
+                    total_registros = counts_map.get(clasi_name, 0) if clasi_name else 0
+                    clasi['total_registros'] = total_registros
+                    clasi['TOTAL_REGISTROS'] = total_registros
+                    
+                    # Si hay filtros activos, solo incluir clasificaciones con total_registros > 0
+                    if not usar_sp_directo:
+                        if total_registros > 0:
+                            clasificaciones_procesadas.append(clasi)
+                    else:
+                        clasificaciones_procesadas.append(clasi)
 
                 result = {
                     "kpis": kpi_data,
