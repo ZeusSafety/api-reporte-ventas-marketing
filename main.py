@@ -190,7 +190,7 @@ def obtener_metricas_dashboard(request, headers):
                             "total": float(row.get('total', 0))
                         })
                     
-                    # Ejecutar SP solo para obtener productos_top, canales, clasificaciones y lineas (sin filtros múltiples en estos)
+                    # Ejecutar SP solo para obtener productos_top y canales (clasificaciones y líneas se recalculan desde cero)
                     cursor.callproc('sp_Dashboard_General1', (
                         n(p_prod), n(p_mes), n(p_canal), n(p_clasi), n(p_linea), f_inicio, f_fin
                     ))
@@ -330,11 +330,11 @@ def obtener_metricas_dashboard(request, headers):
                             params_canales.extend(p_linea_list)
                     
                     # Consulta SQL para canales con TODOS los filtros
+                    # IMPORTANTE: Mostrar cantidad de pedidos (COUNT), no montos (SUM)
                     sql_canales = f"""SELECT 
                                         vo.CANAL_VENTA as canal_venta,
-                                        SUM(dv.TOTAL) as total
+                                        COUNT(DISTINCT vo.ID_VENTA) as total
                                       FROM ventas_online vo
-                                      INNER JOIN detalle_ventas dv ON dv.ID_VENTA = vo.ID_VENTA
                                       WHERE {' AND '.join(where_canales)}
                                       GROUP BY vo.CANAL_VENTA
                                       ORDER BY total DESC"""
@@ -345,11 +345,20 @@ def obtener_metricas_dashboard(request, headers):
                 for c in canales_raw:
                     canales.append({
                         "canal_venta": c.get("canal_venta") or c.get("CANAL_VENTA") or c.get("canal") or c.get("CANAL") or "—",
-                        "total": float(c.get("total") or c.get("TOTAL") or 0)
+                        "total": int(c.get("total") or c.get("TOTAL") or 0)  # Convertir a int porque es COUNT
                     })
                 
-                clasificaciones = fetch_all_safe(cursor) if cursor.nextset() else []
-                lineas = fetch_all_safe(cursor) if cursor.nextset() else []
+                # Si hay filtros activos, clasificaciones y líneas se recalculan desde cero más abajo
+                # Si no hay filtros, obtenerlas del SP
+                if usar_sp_directo:
+                    clasificaciones = fetch_all_safe(cursor) if cursor.nextset() else []
+                    lineas = fetch_all_safe(cursor) if cursor.nextset() else []
+                else:
+                    # Saltar clasificaciones y líneas del SP (se recalculan desde cero)
+                    _ = fetch_all_safe(cursor) if cursor.nextset() else []  # clasificaciones (ignorar)
+                    _ = fetch_all_safe(cursor) if cursor.nextset() else []  # líneas (ignorar)
+                    clasificaciones = []
+                    lineas = []
 
                 # Procesar líneas: agregar conteo de registros (COUNT) además del total
                 # Construir WHERE con los mismos filtros que el SP (excepto linea)
@@ -415,47 +424,43 @@ def obtener_metricas_dashboard(request, headers):
                     if linea_key:
                         counts_map_lineas[linea_key] = row.get('total_registros', 0)
 
-                # Si hay múltiples filtros, recalcular también los valores de total (monto) para líneas
+                # Si hay filtros activos, recalcular completamente las líneas desde cero
                 if not usar_sp_directo:
-                    sql_lineas_total = f"""SELECT 
-                                             vo.LINEA,
-                                             SUM(dv.TOTAL) as total_monto
-                                           FROM ventas_online vo
-                                           INNER JOIN detalle_ventas dv ON dv.ID_VENTA = vo.ID_VENTA
-                                           WHERE {' AND '.join(where_conditions_lineas)}
-                                           GROUP BY vo.LINEA"""
-                    cursor.execute(sql_lineas_total, params_lineas)
-                    monto_map_lineas = {}
-                    for row in cursor.fetchall():
-                        linea_key = row.get('LINEA') or row.get('linea')
-                        if linea_key:
-                            monto_map_lineas[linea_key] = float(row.get('total_monto', 0))
-                    
-                    # Actualizar líneas con valores recalculados
-                    lineas_actualizadas = []
+                    # Crear líneas desde cero usando counts_map_lineas
+                    lineas = []
+                    for linea_name, total_registros in counts_map_lineas.items():
+                        if total_registros > 0:  # Solo incluir las que tienen datos
+                            lineas.append({
+                                'LINEA': linea_name,
+                                'linea': linea_name,
+                                'nombre': linea_name,
+                                'NOMBRE': linea_name,
+                                'descripcion': linea_name,
+                                'DESCRIPCION': linea_name,
+                                'total_registros': total_registros,
+                                'TOTAL_REGISTROS': total_registros,
+                                'total': total_registros,
+                                'TOTAL': total_registros,
+                                'cantidad': total_registros,
+                                'CANTIDAD': total_registros
+                            })
+                else:
+                    # Sin filtros: usar las del SP y agregar total_registros
                     for linea in lineas:
                         linea_name = linea.get('LINEA') or linea.get('linea') or linea.get('nombre') or linea.get('NOMBRE') or linea.get('descripcion') or linea.get('DESCRIPCION')
-                        if linea_name and linea_name in monto_map_lineas:
-                            linea['total'] = monto_map_lineas[linea_name]
-                            linea['TOTAL'] = monto_map_lineas[linea_name]
-                        lineas_actualizadas.append(linea)
-                    lineas = lineas_actualizadas
+                        total_registros = counts_map_lineas.get(linea_name, 0) if linea_name else 0
+                        linea['total_registros'] = total_registros
+                        linea['TOTAL_REGISTROS'] = total_registros
+                        linea['total'] = total_registros
+                        linea['TOTAL'] = total_registros
+                        linea['cantidad'] = total_registros
+                        linea['CANTIDAD'] = total_registros
                 
-                # Agregar total_registros a cada línea y filtrar las que tienen 0 cuando hay filtros activos
-                # IMPORTANTE: Para líneas, siempre usar total_registros (cantidad de pedidos) como valor principal, no total (monto)
+                # Procesar líneas finales
                 lineas_procesadas = []
                 for linea in lineas:
                     linea_name = linea.get('LINEA') or linea.get('linea') or linea.get('nombre') or linea.get('NOMBRE') or linea.get('descripcion') or linea.get('DESCRIPCION')
-                    # Siempre agregar total_registros, usar 0 si no está en el mapa (no hay registros para este filtro)
-                    total_registros = counts_map_lineas.get(linea_name, 0) if linea_name else 0
-                    linea['total_registros'] = total_registros
-                    linea['TOTAL_REGISTROS'] = total_registros
-                    # Sobrescribir 'total' y 'TOTAL' con total_registros para que el frontend siempre use cantidad de pedidos
-                    linea['total'] = total_registros
-                    linea['TOTAL'] = total_registros
-                    # También sobrescribir 'cantidad' y 'CANTIDAD' para consistencia
-                    linea['cantidad'] = total_registros
-                    linea['CANTIDAD'] = total_registros
+                    total_registros = linea.get('total_registros', 0)
                     
                     # Si hay filtros activos, solo incluir líneas con total_registros > 0
                     if not usar_sp_directo:
@@ -525,47 +530,43 @@ def obtener_metricas_dashboard(request, headers):
                     if clasi_key:
                         counts_map[clasi_key] = row.get('total_registros', 0)
 
-                # Si hay múltiples filtros, recalcular también los valores de total (monto) para clasificaciones
+                # Si hay filtros activos, recalcular completamente las clasificaciones desde cero
                 if not usar_sp_directo:
-                    sql_clasi_total = f"""SELECT 
-                                            vo.CLASIFICACION,
-                                            SUM(dv.TOTAL) as total_monto
-                                          FROM ventas_online vo
-                                          INNER JOIN detalle_ventas dv ON dv.ID_VENTA = vo.ID_VENTA
-                                          WHERE {' AND '.join(where_conditions)}
-                                          GROUP BY vo.CLASIFICACION"""
-                    cursor.execute(sql_clasi_total, params)
-                    monto_map = {}
-                    for row in cursor.fetchall():
-                        clasi_key = row.get('CLASIFICACION') or row.get('clasificacion')
-                        if clasi_key:
-                            monto_map[clasi_key] = float(row.get('total_monto', 0))
-                    
-                    # Actualizar clasificaciones con valores recalculados
-                    clasificaciones_actualizadas = []
+                    # Crear clasificaciones desde cero usando counts_map
+                    clasificaciones = []
+                    for clasi_name, total_registros in counts_map.items():
+                        if total_registros > 0:  # Solo incluir las que tienen datos
+                            clasificaciones.append({
+                                'clasificacion_pedido': clasi_name,
+                                'CLASIFICACION_PEDIDO': clasi_name,
+                                'clasificacion': clasi_name,
+                                'CLASIFICACION': clasi_name,
+                                'nombre': clasi_name,
+                                'NOMBRE': clasi_name,
+                                'total_registros': total_registros,
+                                'TOTAL_REGISTROS': total_registros,
+                                'total': total_registros,
+                                'TOTAL': total_registros,
+                                'cantidad': total_registros,
+                                'CANTIDAD': total_registros
+                            })
+                else:
+                    # Sin filtros: usar las del SP y agregar total_registros
                     for clasi in clasificaciones:
                         clasi_name = clasi.get('clasificacion_pedido') or clasi.get('CLASIFICACION_PEDIDO') or clasi.get('clasificacion') or clasi.get('CLASIFICACION') or clasi.get('nombre') or clasi.get('NOMBRE')
-                        if clasi_name and clasi_name in monto_map:
-                            clasi['total'] = monto_map[clasi_name]
-                            clasi['TOTAL'] = monto_map[clasi_name]
-                        clasificaciones_actualizadas.append(clasi)
-                    clasificaciones = clasificaciones_actualizadas
+                        total_registros = counts_map.get(clasi_name, 0) if clasi_name else 0
+                        clasi['total_registros'] = total_registros
+                        clasi['TOTAL_REGISTROS'] = total_registros
+                        clasi['total'] = total_registros
+                        clasi['TOTAL'] = total_registros
+                        clasi['cantidad'] = total_registros
+                        clasi['CANTIDAD'] = total_registros
                 
-                # Agregar total_registros a cada clasificación y filtrar las que tienen 0 cuando hay filtros activos
-                # IMPORTANTE: Para clasificaciones, siempre usar total_registros (cantidad de pedidos) como valor principal, no total (monto)
+                # Procesar clasificaciones finales
                 clasificaciones_procesadas = []
                 for clasi in clasificaciones:
                     clasi_name = clasi.get('clasificacion_pedido') or clasi.get('CLASIFICACION_PEDIDO') or clasi.get('clasificacion') or clasi.get('CLASIFICACION') or clasi.get('nombre') or clasi.get('NOMBRE')
-                    # Siempre agregar total_registros, usar 0 si no está en el mapa (no hay registros para este filtro)
-                    total_registros = counts_map.get(clasi_name, 0) if clasi_name else 0
-                    clasi['total_registros'] = total_registros
-                    clasi['TOTAL_REGISTROS'] = total_registros
-                    # Sobrescribir 'total' y 'TOTAL' con total_registros para que el frontend siempre use cantidad de pedidos
-                    clasi['total'] = total_registros
-                    clasi['TOTAL'] = total_registros
-                    # También sobrescribir 'cantidad' y 'CANTIDAD' para consistencia
-                    clasi['cantidad'] = total_registros
-                    clasi['CANTIDAD'] = total_registros
+                    total_registros = clasi.get('total_registros', 0)
                     
                     # Si hay filtros activos, solo incluir clasificaciones con total_registros > 0
                     if not usar_sp_directo:
